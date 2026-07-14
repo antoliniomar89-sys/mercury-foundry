@@ -16,7 +16,28 @@ Componenti:
 6. **Audit Log** — ogni transizione di stato, ogni scrittura di file, ogni test eseguito, ogni decisione umana viene scritta in una tabella append-only.
 7. **Interfaccia iniziale** — CLI minimale (nessuna interfaccia grafica in V0): comandi per sottomettere un obiettivo, ispezionare lo stato, approvare/rifiutare un candidate.
 
-Decisione aperta su cui chiedo conferma (vedi sezione "Domande per te" sotto): se il Builder in V0 debba essere **deterministico/a template** (niente chiamata a un modello AI, massima sicurezza e prevedibilità) oppure **assistito da un modello AI** (via integrazione Replit, senza bisogno di una tua chiave API) per generare davvero codice da una descrizione di capability. La seconda opzione è più vicina alla visione "AI-native" di Mercury, ma introduce un componente non deterministico da testare con attenzione.
+**Decisione presa (confermata dall'utente): Builder assistito da AI, con limiti stretti.**
+
+Il Builder usa un modello AI **solo** per proporre: piano dei task, patch/diff di codice, test. Tutto il resto del sistema resta **deterministico e controllato**:
+
+- stato del progetto, transizioni del workflow e limite di 3 tentativi automatici sono gestiti da codice deterministico, mai dal modello;
+- l'esecuzione dei test è reale (subprocess `pytest`), mai simulata o decisa dal modello;
+- i criteri di verifica (pass/fail) sono calcolati dal codice, non dal modello;
+- l'audit log e l'Approval Gate umano sono meccanismi di sistema, non delegabili al modello.
+
+**Confinamento del Builder:**
+
+- opera **solo** dentro una workspace sandbox dedicata (`target_project/`); qualsiasi tentativo di scrivere fuori da questa cartella viene bloccato a livello di codice (`SandboxViolation`);
+- ogni modifica produce una **patch/diff ispezionabile** (diff unificato salvato e mostrato, mai applicato "alla cieca");
+- non ha accesso a rete, deploy, spese, invio email o altre azioni esterne — le uniche operazioni possibili sono lettura/scrittura file nella sandbox ed esecuzione di test locali;
+- una candidate è considerata valida **solo se i test reali passano** (nessun risultato può essere marcato "passed" senza un'esecuzione pytest reale);
+- nessun risultato di test è mai simulato: se il provider AI non è disponibile, il sistema usa un `FakeModel` deterministico dichiarato esplicitamente come simulazione, ma i test restano sempre reali.
+
+**Provider AI sostituibile:**
+
+- `AIProvider` è un'interfaccia astratta (`propose_plan`, `propose_patch`) con implementazioni intercambiabili.
+- Implementazione prevista per un provider reale (es. Anthropic/OpenAI) dietro la stessa interfaccia, da collegare quando sarà disponibile una chiave API o un'integrazione attiva.
+- **Per V0, l'utente ha rifiutato l'upgrade richiesto dall'integrazione AI automatica di Replit e non ha fornito una chiave API propria.** Il sistema usa quindi esclusivamente un `FakeModel` deterministico: genera piani e patch tramite regole fisse (basate sul testo del task), etichettato ovunque (log, audit, output CLI) come `provider=fake-deterministic`, `is_simulated=True`. Non genera mai testo che finga di provenire da un vero modello AI. Il codice è scritto in modo che collegare un provider reale in futuro richieda solo di implementare `AIProvider` e cambiare la configurazione, senza toccare Orchestrator/Evaluator/Execution Loop/Approval Gate.
 
 ## 2. Struttura delle cartelle (proposta)
 

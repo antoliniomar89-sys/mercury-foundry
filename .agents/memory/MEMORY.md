@@ -1,0 +1,2 @@
+- [Python module install in pnpm monorepo](python-module-in-pnpm-monorepo.md) — `installLanguagePackages({language:"python"})` creates pyproject.toml/uv.lock/.pythonlibs at repo ROOT, not in a subproject folder; pytest works from any cwd.
+- [setupReplitAIIntegrations declined](ai-integration-declined-flow.md) — if the user declines the account upgrade prompt, don't retry; ask the user (AskQuestion) whether to provide their own key or proceed with a stubbed/fake fallback.

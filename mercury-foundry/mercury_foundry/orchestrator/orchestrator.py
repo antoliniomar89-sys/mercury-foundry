@@ -1,0 +1,84 @@
+"""Orchestrator — intake obiettivo, scomposizione in task, assegnazione, stato."""
+
+from __future__ import annotations
+
+import sqlite3
+from dataclasses import dataclass
+
+from mercury_foundry.ai.provider import AIProvider
+from mercury_foundry.audit.logger import log_action
+from mercury_foundry.execution.loop import ExecutionLoop, TaskOutcome
+from mercury_foundry.orchestrator.decomposition import decompose_goal
+from mercury_foundry.state import models
+
+
+@dataclass
+class GoalRun:
+    goal_id: int
+    task_outcomes: list[TaskOutcome]
+    final_status: str
+
+
+class Orchestrator:
+    def __init__(self, conn: sqlite3.Connection, ai_provider: AIProvider, execution_loop: ExecutionLoop):
+        self.conn = conn
+        self.ai_provider = ai_provider
+        self.execution_loop = execution_loop
+
+    def submit_goal(self, description: str) -> int:
+        goal_id = models.create_goal(self.conn, description)
+        log_action(
+            self.conn,
+            entity_type="goal",
+            entity_id=goal_id,
+            action="GOAL_SUBMITTED",
+            actor="human",
+            payload={"description": description},
+        )
+
+        task_descriptions = decompose_goal(description, self.ai_provider)
+        for index, task_description in enumerate(task_descriptions):
+            task_id = models.create_task(
+                self.conn, goal_id, index, task_description, assigned_to="builder"
+            )
+            log_action(
+                self.conn,
+                entity_type="task",
+                entity_id=task_id,
+                action="TASK_CREATED",
+                actor="system",
+                payload={"goal_id": goal_id, "order_index": index, "description": task_description},
+            )
+
+        models.update_goal_status(self.conn, goal_id, "in_progress")
+        return goal_id
+
+    def run_goal(self, goal_id: int) -> GoalRun:
+        tasks = models.get_tasks_for_goal(self.conn, goal_id)
+        outcomes: list[TaskOutcome] = []
+
+        for task in tasks:
+            outcome = self.execution_loop.run_task(task)
+            outcomes.append(outcome)
+            if outcome.status == "blocked":
+                models.update_goal_status(self.conn, goal_id, "blocked")
+                log_action(
+                    self.conn,
+                    entity_type="goal",
+                    entity_id=goal_id,
+                    action="GOAL_BLOCKED",
+                    actor="system",
+                    payload={"blocked_task_id": task["id"]},
+                )
+                return GoalRun(goal_id=goal_id, task_outcomes=outcomes, final_status="blocked")
+
+        models.update_goal_status(self.conn, goal_id, "awaiting_approval")
+        log_action(
+            self.conn,
+            entity_type="goal",
+            entity_id=goal_id,
+            action="GOAL_AWAITING_APPROVAL",
+            actor="system",
+            payload={"candidate_ids": [o.candidate_id for o in outcomes]},
+        )
+        return GoalRun(goal_id=goal_id, task_outcomes=outcomes, final_status="awaiting_approval")
