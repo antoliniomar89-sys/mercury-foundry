@@ -46,6 +46,10 @@ def test_end_to_end_health_check(tmp_path):
     # La candidate esiste ma non è ancora approvata: serve un'azione umana.
     candidate = models.get_candidate(foundry.conn, outcome.candidate_id)
     assert candidate["status"] == "pending_review"
+    # La candidate porta con sé l'identità del provider e il flag di simulazione:
+    # non deve poter essere scambiata per una generazione AI reale.
+    assert candidate["provider_name"] == "fake-deterministic"
+    assert bool(candidate["is_simulated"]) is True
 
     # Audit log copre l'intero ciclo.
     audit_rows = list_audit_log(foundry.conn)
@@ -75,6 +79,15 @@ def test_end_to_end_health_check(tmp_path):
 
     actions_after = [row["action"] for row in list_audit_log(foundry.conn)]
     assert "CANDIDATE_APPROVED" in actions_after
+
+    # Il record di audit dell'approvazione conserva uno snapshot dell'identità
+    # del provider e della simulazione al momento della decisione umana.
+    approval_row = next(r for r in list_audit_log(foundry.conn) if r["action"] == "CANDIDATE_APPROVED")
+    import json as _json
+
+    approval_payload = _json.loads(approval_row["payload_json"])
+    assert approval_payload["provider_name"] == "fake-deterministic"
+    assert approval_payload["is_simulated"] is True
 
 
 def test_max_three_attempts_blocks_task_when_always_failing(tmp_path, monkeypatch):

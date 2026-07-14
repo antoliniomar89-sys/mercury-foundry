@@ -159,13 +159,27 @@ def get_test_results_for_attempt(conn: sqlite3.Connection, attempt_id: int) -> l
 
 # --- candidates -----------------------------------------------------------------
 
-def create_candidate(conn: sqlite3.Connection, goal_id: int, task_id: int, summary: str) -> int:
+def create_candidate(
+    conn: sqlite3.Connection,
+    goal_id: int,
+    task_id: int,
+    summary: str,
+    *,
+    provider_name: str,
+    is_simulated: bool,
+) -> int:
+    """Crea una candidate. `provider_name`/`is_simulated` sono obbligatori:
+
+    ogni candidate deve poter essere ispezionata senza ambiguità su chi/cosa
+    ha generato la patch verificata, per non scambiare un risultato simulato
+    per una generazione AI reale.
+    """
     cur = conn.execute(
         """
-        INSERT INTO candidates (goal_id, task_id, summary, status, created_at)
-        VALUES (?, ?, ?, 'pending_review', ?)
+        INSERT INTO candidates (goal_id, task_id, summary, status, provider_name, is_simulated, created_at)
+        VALUES (?, ?, ?, 'pending_review', ?, ?, ?)
         """,
-        (goal_id, task_id, summary, _now()),
+        (goal_id, task_id, summary, provider_name, 1 if is_simulated else 0, _now()),
     )
     conn.commit()
     return cur.lastrowid
@@ -208,6 +222,12 @@ def create_decision(
     )
     conn.commit()
     return cur.lastrowid
+
+
+def any_candidate_is_simulated(conn: sqlite3.Connection, goal_id: int | None = None) -> bool:
+    """True se almeno una candidate (del goal, o di tutte) è marcata come simulata."""
+    candidates = list_candidates(conn, goal_id)
+    return any(bool(c["is_simulated"]) for c in candidates)
 
 
 def maybe_complete_goal(conn: sqlite3.Connection, goal_id: int) -> bool:

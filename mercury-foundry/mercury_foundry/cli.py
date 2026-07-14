@@ -16,13 +16,27 @@ import sys
 
 from mercury_foundry.approval import gate
 from mercury_foundry.audit.logger import list_audit_log
+from mercury_foundry.diagnostics import run_doctor
 from mercury_foundry.state import models
 from mercury_foundry.wiring import build_foundry
 
 
+def _simulated_tag(is_simulated: bool) -> str:
+    return "[SIMULATO]" if is_simulated else "[REALE]"
+
+
+def cmd_doctor(args: argparse.Namespace) -> int:
+    report = run_doctor(db_path=args.db, sandbox_root=args.sandbox, provider_name=args.provider)
+    print(report.render())
+    return 0 if not report.has_errors() else 1
+
+
 def cmd_submit(args: argparse.Namespace) -> int:
-    foundry = build_foundry(db_path=args.db, sandbox_root=args.sandbox)
-    print(f"[provider] {foundry.ai_provider.name} (is_simulated={foundry.ai_provider.is_simulated})")
+    foundry = build_foundry(db_path=args.db, sandbox_root=args.sandbox, provider_name=args.provider)
+    print(
+        f"[provider] {foundry.ai_provider.name} "
+        f"{_simulated_tag(foundry.ai_provider.is_simulated)} (is_simulated={foundry.ai_provider.is_simulated})"
+    )
 
     goal_id = foundry.orchestrator.submit_goal(args.description)
     print(f"[goal] creato goal_id={goal_id}: {args.description}")
@@ -55,26 +69,36 @@ def cmd_status(args: argparse.Namespace) -> int:
                     f"provider={attempt['provider_name']} simulated={bool(attempt['is_simulated'])}"
                 )
         for candidate in models.list_candidates(conn, goal["id"]):
-            print(f"  CANDIDATE {candidate['id']} [{candidate['status']}] {candidate['summary']}")
+            tag = _simulated_tag(bool(candidate["is_simulated"]))
+            print(
+                f"  CANDIDATE {candidate['id']} [{candidate['status']}] {tag} "
+                f"provider={candidate['provider_name']} {candidate['summary']}"
+            )
     return 0
 
 
 def cmd_approve(args: argparse.Namespace) -> int:
-    foundry = build_foundry(db_path=args.db, sandbox_root=args.sandbox)
+    foundry = build_foundry(db_path=args.db, sandbox_root=args.sandbox, provider_name=args.provider)
+    candidate = models.get_candidate(foundry.conn, args.candidate_id)
+    if candidate is not None and bool(candidate["is_simulated"]):
+        print(
+            f"ATTENZIONE: la candidate {args.candidate_id} è stata generata dal provider "
+            f"SIMULATO '{candidate['provider_name']}' — non è codice scritto da un'AI reale."
+        )
     gate.approve_candidate(foundry.conn, args.candidate_id, rationale=args.reason)
     print(f"[candidate {args.candidate_id}] approvata da umano. rationale={args.reason!r}")
     return 0
 
 
 def cmd_reject(args: argparse.Namespace) -> int:
-    foundry = build_foundry(db_path=args.db, sandbox_root=args.sandbox)
+    foundry = build_foundry(db_path=args.db, sandbox_root=args.sandbox, provider_name=args.provider)
     gate.reject_candidate(foundry.conn, args.candidate_id, rationale=args.reason)
     print(f"[candidate {args.candidate_id}] rifiutata da umano. rationale={args.reason!r}")
     return 0
 
 
 def cmd_audit(args: argparse.Namespace) -> int:
-    foundry = build_foundry(db_path=args.db, sandbox_root=args.sandbox)
+    foundry = build_foundry(db_path=args.db, sandbox_root=args.sandbox, provider_name=args.provider)
     rows = list_audit_log(
         foundry.conn, entity_type=args.entity_type, entity_id=args.entity_id, limit=args.limit
     )
@@ -91,8 +115,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="mercury-foundry", description=__doc__)
     parser.add_argument("--db", default=None, help="percorso del DB SQLite (default: data/mercury_foundry.db)")
     parser.add_argument("--sandbox", default=None, help="cartella sandbox target (default: target_project/)")
+    parser.add_argument(
+        "--provider",
+        default=None,
+        help="nome del provider AI da usare (default: 'fake', o $MERCURY_AI_PROVIDER)",
+    )
 
     subparsers = parser.add_subparsers(dest="command", required=True)
+
+    p_doctor = subparsers.add_parser("doctor", help="diagnostica lo stato dell'installazione")
+    p_doctor.set_defaults(func=cmd_doctor)
 
     p_submit = subparsers.add_parser("submit", help="sottomette un obiettivo ed esegue il ciclo completo")
     p_submit.add_argument("description", help="descrizione testuale dell'obiettivo")

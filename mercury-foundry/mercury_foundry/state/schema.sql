@@ -60,6 +60,13 @@ CREATE TABLE IF NOT EXISTS candidates (
     task_id INTEGER NOT NULL REFERENCES tasks(id),
     summary TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'pending_review', -- pending_review | approved | rejected
+    -- Identità del provider che ha generato la patch verificata in questa candidate,
+    -- e se si tratta di una simulazione. Denormalizzato qui (oltre a "attempts")
+    -- perché una candidate deve poter essere ispezionata/approvata senza dover
+    -- risalire manualmente all'attempt: previene che una candidate simulata sia
+    -- scambiata per generazione AI reale.
+    provider_name TEXT NOT NULL,
+    is_simulated INTEGER NOT NULL,
     created_at TEXT NOT NULL
 );
 

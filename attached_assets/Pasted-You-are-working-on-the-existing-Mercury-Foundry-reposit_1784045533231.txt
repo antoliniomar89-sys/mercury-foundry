@@ -1,0 +1,101 @@
+You are working on the existing Mercury Foundry repository.
+
+Do not redesign or replace the project. First inspect the complete repository and preserve the existing architecture, CLI commands, SQLite state, audit log, sandbox restrictions, execution loop, attempt limits, and mandatory human approval gate.
+
+CURRENT REALITY
+
+Mercury Foundry V0 already contains a real deterministic workflow:
+
+SPEC → PLAN → BUILD → TEST → FIX → VERIFY → CANDIDATE
+
+However, planning and patch generation currently use FakeModel with provider=fake-deterministic and is_simulated=True.
+
+The goal of this task is NOT to build the full Mercury system and NOT yet to add an external paid AI provider.
+
+The goal is to create Mercury Foundry V0.1 as a safer, inspectable, testable foundation before enabling real AI execution.
+
+TASK
+
+Perform a repository-wide technical audit and implement the smallest coherent V0.1 improvement set.
+
+Required outcomes:
+
+1. Add a diagnostic command:
+
+   python3 -m mercury_foundry.cli doctor
+
+2. The doctor command must inspect and report at least:
+
+   - Python/runtime compatibility
+   - database availability and schema validity
+   - target_project existence and write isolation
+   - configured AI provider
+   - whether the provider is simulated
+   - test command availability
+   - maximum automatic attempts
+   - approval gate enabled status
+   - audit log availability
+   - any unsafe or inconsistent configuration
+
+3. The output must end with exactly one overall status:
+
+   READY_SIMULATED
+   READY_REAL
+   NOT_READY
+
+4. Add strict provider safety:
+
+   - simulated and real providers must be explicitly distinguishable;
+   - no provider may silently fall back to FakeModel;
+   - if an unknown or misconfigured provider is requested, execution must stop with a clear error;
+   - every run, candidate and audit record must retain provider identity and simulation status.
+
+5. Preserve FakeModel for deterministic tests, but clearly prevent simulated candidates from being mistaken for real AI-generated candidates.
+
+6. Expand automated tests to cover at least:
+
+   - doctor in healthy simulated mode;
+   - doctor with invalid database or configuration;
+   - unknown provider rejection;
+   - no silent fallback to FakeModel;
+   - provider metadata persistence;
+   - mandatory approval gate;
+   - maximum-attempt blocking;
+   - sandbox path traversal rejection;
+   - audit append-only behavior;
+   - regression of the existing end-to-end health-check flow.
+
+7. Update README.md and PLAN.md so they reflect the actual implemented state rather than an outdated pre-code draft.
+
+8. Do not add a web UI.
+9. Do not deploy anything.
+10. Do not call paid external APIs.
+11. Do not remove the human approval gate.
+12. Do not claim that real AI is connected unless it genuinely is.
+
+EXECUTION PROCESS
+
+Before changing code:
+
+A. Inspect the repository.
+B. Summarize the actual current architecture.
+C. Identify the highest-risk gaps.
+D. Present a concise implementation plan.
+
+Then implement the changes.
+
+After implementation:
+
+E. Run the complete Mercury Foundry test suite.
+F. Run the doctor command.
+G. Run one end-to-end simulated submission.
+H. Show the resulting status, candidate metadata and audit evidence.
+I. Report every changed file.
+J. Clearly separate:
+   - what is real,
+   - what remains simulated,
+   - what remains missing for V1.
+
+Do not stop after writing code. Continue until tests pass or clearly report the exact blocker.
+
+Do not make unrelated changes.

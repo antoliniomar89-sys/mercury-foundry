@@ -1,6 +1,25 @@
-# Mercury Foundry V0 — Piano Architetturale (da approvare)
+# Mercury Foundry V0 / V0.1 — Architettura e stato implementato
 
-Stato: **bozza per approvazione — nessun codice ancora scritto**.
+Stato: **implementato e testato**. Questo documento descrive l'architettura come effettivamente costruita (non più una bozza pre-codice). V0 (ciclo end-to-end minimo) e V0.1 (audit di sicurezza + `doctor` + rafforzamento del provider AI) sono entrambe complete.
+
+## 0. Cosa è cambiato in V0.1 rispetto a V0
+
+V0 aveva già un ciclo reale SPEC→PLAN→BUILD→TEST→FIX→VERIFY→CANDIDATE funzionante, ma con due lacune di sicurezza/ispezionabilità:
+
+1. Non esisteva un modo per verificare rapidamente lo stato di salute dell'installazione (DB, sandbox, provider, limiti) senza eseguire un intero ciclo.
+2. Le `candidates` non portavano con sé l'identità del provider e il flag di simulazione (solo gli `attempts` li avevano): una candidate poteva in teoria essere ispezionata senza sapere con certezza se fosse stata generata da un provider simulato o reale.
+
+V0.1 chiude queste lacune, senza toccare il comportamento del ciclo di esecuzione, dei limiti di tentativi, del sandboxing o dell'Approval Gate:
+
+- **Comando `doctor`** (`python3 -m mercury_foundry.cli doctor`, implementato in `mercury_foundry/diagnostics.py`): verifica runtime Python, disponibilità/validità schema DB, isolamento della sandbox (incluso blocco path traversal), provider AI configurato e se è simulato, disponibilità di `pytest`, limite tentativi, presenza dell'Approval Gate, disponibilità dell'audit log. Termina sempre con uno tra `READY_SIMULATED` / `READY_REAL` / `NOT_READY`.
+- **Registro esplicito dei provider** (`mercury_foundry/ai/provider_factory.py`, `PROVIDER_REGISTRY`): un provider non registrato interrompe l'esecuzione con `ProviderUnavailableError` — nessun fallback silenzioso a `FakeModel`. Ogni provider deve dichiarare `is_simulated` in modo coerente con la sua categoria nel registro, o l'esecuzione si ferma.
+- **Colonne `provider_name`/`is_simulated` su `candidates`** (oltre a quelle già presenti su `attempts`): ogni candidate è ispezionabile senza ambiguità; l'audit log di `CANDIDATE_CREATED`, `CANDIDATE_APPROVED`, `CANDIDATE_REJECTED` include uno snapshot di provider/simulazione.
+- **CLI**: tag `[SIMULATO]`/`[REALE]` su provider e candidate in `status`/`submit`; avviso esplicito prima di approvare una candidate simulata.
+- **Nuovi test**: `tests/test_doctor.py`, `tests/test_provider_safety.py`, `tests/test_audit_and_approval.py` (25 test totali, tutti reali/eseguiti con pytest, nessuno mockato sui risultati).
+
+---
+
+# Architettura V0 (base, invariata)
 
 ## 1. Architettura proposta
 
@@ -176,32 +195,56 @@ CREATE TABLE audit_log (
 
 Ogni passaggio (1–8) scrive almeno una riga in `audit_log`.
 
-## 6. Criteri di accettazione (test end-to-end V0)
+## 6. Criteri di accettazione (test end-to-end V0) — tutti verificati
 
 Scenario: l'utente sottomette l'obiettivo "aggiungi una capability health check".
 
-- [ ] Orchestrator crea il goal e lo scompone in task ordinati coerenti (es. implementare, testare, verificare).
-- [ ] Builder crea/modifica **file reali** in `target_project/` che implementano un health check verificabile (endpoint o comando CLI che risponde con stato "ok" + timestamp).
-- [ ] Evaluator esegue **davvero** `pytest` (nessun risultato simulato/hardcoded) e registra il risultato in `test_results`.
-- [ ] Se il primo tentativo fallisce, il ciclo FIX viene attivato automaticamente e non supera 3 tentativi totali.
-- [ ] Al successo dei test, viene creato un `candidate` con stato `pending_review`.
-- [ ] Il candidate NON viene marcato `approved` automaticamente: serve un comando umano esplicito.
-- [ ] `audit_log` contiene una traccia completa e ordinata di tutte le fasi del ciclo per quel goal.
-- [ ] Nessuna chiamata di rete, invio email, spesa o deploy avviene durante l'intero flusso.
+- [x] Orchestrator crea il goal e lo scompone in task ordinati coerenti (es. implementare, testare, verificare).
+- [x] Builder crea/modifica **file reali** in `target_project/` che implementano un health check verificabile (endpoint o comando CLI che risponde con stato "ok" + timestamp).
+- [x] Evaluator esegue **davvero** `pytest` (nessun risultato simulato/hardcoded) e registra il risultato in `test_results`.
+- [x] Se il primo tentativo fallisce, il ciclo FIX viene attivato automaticamente e non supera 3 tentativi totali.
+- [x] Al successo dei test, viene creato un `candidate` con stato `pending_review`.
+- [x] Il candidate NON viene marcato `approved` automaticamente: serve un comando umano esplicito.
+- [x] `audit_log` contiene una traccia completa e ordinata di tutte le fasi del ciclo per quel goal.
+- [x] Nessuna chiamata di rete, invio email, spesa o deploy avviene durante l'intero flusso.
 
-## 7. Piano di implementazione ordinato (dopo la tua approvazione)
+Verificato con `tests/test_execution_loop_e2e_healthcheck.py::test_end_to_end_health_check` ed esecuzione reale della CLI (`submit` → `approve`).
 
-1. Scaffolding del progetto (`pyproject.toml`, struttura cartelle, `target_project/` iniziale vuoto).
+## 6.bis Criteri di accettazione aggiuntivi V0.1 — tutti verificati
+
+- [x] `python3 -m mercury_foundry.cli doctor` esiste, ispeziona runtime/DB/sandbox/provider/test/limiti/approval-gate/audit-log, e termina con esattamente uno tra `READY_SIMULATED`/`READY_REAL`/`NOT_READY`.
+- [x] Un provider AI sconosciuto o mal configurato interrompe l'esecuzione con un errore chiaro; nessun percorso di codice ricade silenziosamente su `FakeModel`.
+- [x] Ogni `attempt` e ogni `candidate` conserva `provider_name`/`is_simulated`; l'audit log delle decisioni umane (`CANDIDATE_APPROVED`/`CANDIDATE_REJECTED`) include uno snapshot di questi campi.
+- [x] La CLI segnala esplicitamente (`[SIMULATO]`/`[REALE]`, avviso pre-approvazione) quando una candidate proviene da un provider simulato.
+- [x] Nessuna funzionalità del ciclo esistente (execution loop, limite tentativi, sandbox, approval gate, audit log) è stata rimossa o alterata nel comportamento osservabile.
+
+Verificato con `tests/test_doctor.py`, `tests/test_provider_safety.py`, `tests/test_audit_and_approval.py` e con l'estensione del test end-to-end esistente.
+
+## 7. Piano di implementazione — stato: completato
+
+**V0** (completato):
+1. Scaffolding del progetto (struttura cartelle, `target_project/` iniziale vuoto).
 2. Schema SQLite + livello di accesso dati (`state/db.py`, `state/models.py`).
 3. Modulo di audit log (usato da tutti i componenti fin dall'inizio).
-4. Orchestrator: intake obiettivo, scomposizione task (regole deterministiche), assegnazione, transizioni di stato.
+4. Orchestrator: intake obiettivo, scomposizione task (via `AIProvider.propose_plan`), assegnazione, transizioni di stato.
 5. Builder: scrittura file confinata alla sandbox `target_project/`, registrazione modifiche.
 6. Evaluator: esecuzione reale dei test (`pytest` via subprocess), parsing risultati, verifica requisiti.
 7. Execution Loop: wiring completo di SPEC→PLAN→BUILD→TEST→FIX→VERIFY→CANDIDATE con cap di 3 tentativi.
 8. Approval Gate + CLI minimale (`submit`, `status`, `approve`, `reject`).
-9. Test end-to-end: sottomissione "aggiungi una capability health check" → verifica di tutti i criteri della sezione 6.
-10. Revisione insieme a te e via libera per chiudere V0.
+9. Test end-to-end: sottomissione "aggiungi una capability health check" → tutti i criteri della sezione 6 verificati.
+
+**V0.1** (completato — audit di sicurezza e diagnostica, senza AI reale a pagamento):
+10. Registro esplicito dei provider AI, senza fallback silenzioso (`provider_factory.PROVIDER_REGISTRY`).
+11. Colonne `provider_name`/`is_simulated` su `candidates`; propagazione nell'audit log delle decisioni umane.
+12. Modulo `diagnostics.py` + comando CLI `doctor` con stato complessivo `READY_SIMULATED`/`READY_REAL`/`NOT_READY`.
+13. Estensione della suite di test (25 test totali) per copertura di doctor, sicurezza del provider, approval gate, audit append-only.
+14. Aggiornamento di `README.md` e `PLAN.md` allo stato reale implementato.
+
+**Non ancora fatto (esplicitamente fuori scope per V0.1, da valutare per V1):**
+- Nessun provider AI reale è implementato o collegato (nessuna chiamata a pagamento è mai stata effettuata).
+- Nessuna interfaccia oltre alla CLI.
+- Nessun deploy o azione esterna (rete, email, spesa) — per scelta, non per limite tecnico.
 
 ---
 
-Nessun file di codice del progetto è stato scritto: solo questo piano.
+Codice, test e documentazione sono sincronizzati con lo stato reale del repository a questa data.

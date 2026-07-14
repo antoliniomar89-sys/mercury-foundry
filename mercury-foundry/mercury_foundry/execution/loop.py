@@ -130,7 +130,12 @@ class ExecutionLoop:
                 models.update_task_status(self.conn, task_id, "passed")
 
                 candidate_id = models.create_candidate(
-                    self.conn, goal_id, task_id, summary=build_result.proposal.summary
+                    self.conn,
+                    goal_id,
+                    task_id,
+                    summary=build_result.proposal.summary,
+                    provider_name=build_result.proposal.provider_name,
+                    is_simulated=build_result.proposal.is_simulated,
                 )
                 log_action(
                     self.conn,
@@ -143,6 +148,8 @@ class ExecutionLoop:
                         "goal_id": goal_id,
                         "status": "pending_review",
                         "requires_human_approval": True,
+                        "provider_name": build_result.proposal.provider_name,
+                        "is_simulated": build_result.proposal.is_simulated,
                     },
                 )
                 return TaskOutcome(

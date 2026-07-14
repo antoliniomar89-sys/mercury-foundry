@@ -40,7 +40,14 @@ def approve_candidate(conn: sqlite3.Connection, candidate_id: int, rationale: st
         entity_id=candidate_id,
         action="CANDIDATE_APPROVED",
         actor="human",
-        payload={"rationale": rationale},
+        payload={
+            "rationale": rationale,
+            # Snapshot dell'identità del provider al momento dell'approvazione:
+            # l'audit deve poter mostrare, anche in futuro, se l'umano ha
+            # approvato codice simulato o generato da un provider reale.
+            "provider_name": candidate["provider_name"],
+            "is_simulated": bool(candidate["is_simulated"]),
+        },
     )
     models.maybe_complete_goal(conn, candidate["goal_id"])
 
@@ -69,6 +76,10 @@ def reject_candidate(conn: sqlite3.Connection, candidate_id: int, rationale: str
         entity_id=candidate_id,
         action="CANDIDATE_REJECTED",
         actor="human",
-        payload={"rationale": rationale},
+        payload={
+            "rationale": rationale,
+            "provider_name": candidate["provider_name"],
+            "is_simulated": bool(candidate["is_simulated"]),
+        },
     )
     models.update_goal_status(conn, candidate["goal_id"], "blocked")
