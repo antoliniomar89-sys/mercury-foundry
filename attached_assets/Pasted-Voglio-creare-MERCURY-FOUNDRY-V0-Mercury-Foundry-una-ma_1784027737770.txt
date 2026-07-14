@@ -1,0 +1,62 @@
+Voglio creare MERCURY FOUNDRY V0.
+
+Mercury Foundry è una macchina software che dovrà aiutare a costruire progressivamente MERCURY, un sistema AI-native capace di individuare opportunità economiche, creare esperimenti, misurare outcome reali e sviluppare nuove capacità.
+
+Per ora NON costruire Mercury completo e NON creare una grande piattaforma.
+
+Progetta una prima versione minima e funzionante con questi componenti:
+
+1. ORCHESTRATOR
+- riceve un obiettivo tecnico;
+- lo trasforma in task ordinati;
+- assegna ogni task a Builder o Evaluator;
+- mantiene lo stato del progetto.
+
+2. BUILDER
+- crea o modifica file del progetto;
+- implementa una capability richiesta;
+- registra ciò che ha modificato.
+
+3. EVALUATOR
+- controlla il lavoro del Builder;
+- esegue test automatici;
+- segnala errori e requisiti non soddisfatti;
+- richiede una correzione quando necessario.
+
+4. PROJECT STATE
+- stato persistente in SQLite;
+- obiettivi;
+- task;
+- tentativi;
+- risultati dei test;
+- decisioni;
+- audit log.
+
+5. EXECUTION LOOP
+SPEC → PLAN → BUILD → TEST → FIX → VERIFY → CANDIDATE
+
+Vincoli:
+- usa Python;
+- architettura semplice e modulare;
+- interfaccia iniziale minimale;
+- nessun deploy automatico in produzione;
+- nessuna spesa, invio di email o azione esterna;
+- massimo 3 tentativi automatici per task;
+- ogni azione deve essere registrata;
+- le modifiche importanti richiedono approvazione umana;
+- non simulare risultati: esegui realmente i test;
+- evita framework multi-agent complessi se non indispensabili.
+
+Primo test end-to-end:
+la Foundry riceve la richiesta “aggiungi una capability health check”, crea il piano, implementa un endpoint o comando health check, genera ed esegue i test, corregge eventuali errori e produce una candidate verificata.
+
+Per questa fase genera SOLTANTO:
+- architettura proposta;
+- struttura delle cartelle;
+- dipendenze;
+- schema del database;
+- flusso operativo;
+- criteri di accettazione;
+- piano di implementazione ordinato.
+
+Non scrivere ancora il progetto completo. Fammi prima approvare il piano.
