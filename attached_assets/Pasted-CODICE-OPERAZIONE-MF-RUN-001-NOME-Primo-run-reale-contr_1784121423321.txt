@@ -1,0 +1,131 @@
+CODICE OPERAZIONE: MF-RUN-001
+NOME: Primo run reale controllato di Mercury Foundry
+
+Siamo pronti a ripetere il primo run reale completamente controllato di Mercury Foundry, dopo le correzioni relative agli Structured Outputs e alla registrazione delle chiamate del provider.
+
+Non implementare direttamente la modifica richiesta.
+Devi utilizzare la CLI esistente di Mercury Foundry e il provider OpenAI reale, così che la modifica venga prodotta attraverso il workflow effettivo della Foundry.
+
+OBIETTIVO
+
+Esegui esattamente una submission reale di Mercury Foundry su target_project.
+
+MODIFICA RICHIESTA
+
+Crea esattamente un solo nuovo file:
+
+target_project/MERCURY_FOUNDRY_PROBE.md
+
+Il contenuto completo del file deve essere esattamente:
+
+# Mercury Foundry Real-Provider Probe
+
+status: candidate
+purpose: verify the complete controlled real-provider workflow
+
+Non deve essere creato, modificato, rinominato o eliminato nessun altro file dentro target_project.
+
+CRITERI DI SUCCESSO
+
+1. La richiesta deve attraversare il workflow esistente:
+
+SPEC → PLAN → BUILD → TEST → FIX se necessario → VERIFY → CANDIDATE
+
+2. Usa il provider OpenAI reale già configurato e il secret Replit OPENAI_API_KEY.
+
+3. Usa gpt-4o-mini, salvo che la configurazione corrente richieda esplicitamente un altro modello già supportato.
+
+4. Limiti massimi:
+
+- 2 chiamate al provider;
+- 2 tentativi automatici;
+- 2.000 token totali;
+- costo stimato massimo di 0,01 USD.
+
+5. La verifica deve controllare:
+
+- che il file esista;
+- che il contenuto corrisponda esattamente, byte per byte;
+- che non siano presenti virgolette aggiuntive;
+- che non siano presenti spazi, righe o contenuti finali indesiderati;
+- che nessun altro file dentro target_project sia cambiato.
+
+6. Mantieni tutte le restrizioni della sandbox e blocca il processo in modalità fail-closed in caso di scrittura inattesa.
+
+7. Registra esattamente una riga nella tabella provider_calls per ogni chiamata reale effettuata, incluse:
+
+- chiamata di planning;
+- chiamata di generazione della patch.
+
+8. Il candidato finale deve contenere almeno:
+
+- provider_name;
+- model;
+- is_simulated=false;
+- run_id;
+- numero di tentativi;
+- elenco esatto dei file modificati;
+- risultato della verifica;
+- utilizzo token per ogni chiamata;
+- utilizzo token totale;
+- costo stimato per ogni chiamata;
+- costo totale stimato;
+- prove di audit complete.
+
+9. Non approvare, applicare, promuovere, integrare o accettare automaticamente il candidato.
+
+10. Fermati obbligatoriamente al gate di approvazione umana.
+
+11. Non effettuare modifiche non correlate al codice sorgente di Mercury Foundry.
+
+PROCESSO DI ESECUZIONE
+
+A. Esegui doctor in modalità provider reale.
+
+B. Se lo stato non è READY_REAL, fermati prima di qualsiasi chiamata al provider e indica il blocco esatto.
+
+C. Prima dell’esecuzione mostra:
+
+- la submission esatta che verrà inviata;
+- il comando CLI esatto;
+- provider configurato;
+- modello configurato;
+- limiti configurati.
+
+D. Esegui esattamente un solo run controllato della Foundry.
+
+E. Non superare il numero massimo di chiamate al provider, inclusi eventuali retry.
+
+F. Al termine controlla:
+
+- candidato prodotto;
+- stato di target_project;
+- record provider_calls;
+- audit log append-only.
+
+G. Riporta chiaramente:
+
+- codice operazione: MF-RUN-001;
+- stato doctor;
+- stato del run;
+- stato del candidato;
+- file esatti creati, modificati o eliminati;
+- contenuto finale esatto del file;
+- risultato della verifica byte per byte;
+- risultato dell’isolamento dello scope;
+- provider;
+- modello;
+- reale o simulato;
+- numero di chiamate al provider;
+- numero di tentativi;
+- token di input;
+- token di output;
+- token totali;
+- costo stimato;
+- prove di audit;
+- conferma che il gate umano stia ancora bloccando la promozione.
+
+H. Se uno qualsiasi dei requisiti fallisce, fermati in modalità fail-closed e indica la causa precisa.
+
+Non effettuare ulteriori chiamate al provider dopo questo run.
+Non approvare il candidato.
