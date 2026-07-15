@@ -51,3 +51,25 @@ shape: snapshot everything needed to restore *before* the first destructive
 write, do the destructive write, then do all bookkeeping writes in one
 transaction, and give the "rollback itself failed" case its own terminal
 state rather than retrying blindly.
+
+## Follow-up: close every DB-only bypass for records predating the guarantees
+A later audit found one more hole: `approve_candidate` still had a fallback
+that let records created *before* this whole staging/manifest/backup system
+existed (no `staging_root`/`target_snapshot_hash`/`target_root`/manifest)
+slip through via a plain DB status flip, since "legacy record, nothing to
+verify" had originally been read as "skip verification" instead of "cannot
+be verified, so cannot be promoted."
+
+**Why:** a record that predates a safety mechanism has no way to satisfy
+that mechanism's checks — treating "nothing to check" as "check passed" is
+the same fail-open bug the mechanism was built to prevent, just moved one
+level up (into which records are exempt).
+
+**How to apply:** whenever you add a mandatory verification gate to an
+existing write path, audit every branch that bypasses the gate entirely
+(compat shims, legacy fallbacks, "if not present, skip") — bypassing
+verification for old data is equivalent to no verification. Give incomplete
+records an explicit "not promotable" terminal error instead of a silent
+alternate path; they should remain inspectable/rejectable, just never
+auto-migrated or promoted retroactively from whatever happens to sit in the
+target now (that data was never attributed to the record in the first place).

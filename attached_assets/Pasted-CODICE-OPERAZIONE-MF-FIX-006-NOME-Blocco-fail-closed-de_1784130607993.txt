@@ -1,0 +1,101 @@
+CODICE OPERAZIONE: MF-FIX-006
+NOME: Blocco fail-closed delle candidate legacy prive di staging
+
+Non effettuare chiamate reali.
+Non eseguire MF-RUN-003.
+Non approvare alcuna candidate esistente.
+Non modificare target_project.
+
+CONTESTO
+
+L’audit del commit fcd3dfc ha verificato positivamente:
+
+- integrità completa dello staging;
+- backup e rollback filesystem/DB;
+- recovery_required;
+- contabilità provider a livello di run_id.
+
+È rimasto un solo bypass bloccante:
+
+approve_candidate consente ancora alle candidate legacy, prive di staging_root, target_snapshot_hash o target_root, di essere approvate tramite una semplice transazione DB.
+
+Nel database esiste già almeno una candidate legacy pending_review con staging fields NULL.
+
+OBIETTIVO
+
+Nessuna candidate priva delle garanzie introdotte da MF-FIX-004 e MF-FIX-005 deve poter diventare approved.
+
+REQUISITI
+
+1. Rimuovi il percorso di approvazione DB-only per candidate legacy.
+
+2. Se una candidate pending_review manca di uno qualsiasi dei seguenti dati:
+
+- staging_root;
+- target_snapshot_hash;
+- target_root registrato;
+- staging_manifest completo;
+- diff manifest valido;
+
+approve_candidate deve fermarsi fail-closed.
+
+3. Introduci un errore esplicito:
+
+LegacyCandidateNotPromotableError
+
+oppure un nome equivalente.
+
+4. In caso di blocco:
+
+- target_project invariato;
+- candidate non approved;
+- nessuna decisione approve;
+- audit dell’evento;
+- nessuna promozione;
+- nessun backup inutile.
+
+5. Le candidate legacy possono essere rifiutate manualmente.
+
+6. Il rifiuto deve:
+
+- portarle a rejected;
+- non modificare target_project;
+- non tentare cleanup di staging inesistente;
+- impedire qualsiasi futura approvazione.
+
+7. Non migrare automaticamente una candidate legacy verso il nuovo formato.
+8. Non creare staging retroattivo da file già presenti nel target.
+9. Non assumere che i file presenti nel target appartengano alla candidate legacy.
+
+10. Chiarisci la semantica dell’idempotenza:
+
+- non duplicare decisioni;
+- scegli esplicitamente se registrare oppure no i tentativi NOOP nell’audit;
+- allinea test e documentazione al comportamento scelto.
+
+TEST OBBLIGATORI
+
+Aggiungi test per:
+
+1. candidate legacy con staging_root NULL non approvabile;
+2. target_snapshot_hash NULL non approvabile;
+3. target_root mancante non approvabile;
+4. staging_manifest mancante o invalido non approvabile;
+5. target immutato in tutti i casi;
+6. nessuna decisione approve creata;
+7. audit del blocco;
+8. candidate legacy rifiutabile;
+9. candidate legacy rifiutata non più approvabile;
+10. candidate moderna completa ancora approvabile;
+11. regressione completa della suite.
+
+DOPO L’IMPLEMENTAZIONE
+
+- esegui tutta la suite;
+- nessuna chiamata reale;
+- non eseguire MF-RUN-003;
+- riporta test passati;
+- riporta file modificati;
+- conferma lo stato della candidate legacy esistente;
+- non rifiutarla automaticamente;
+- non modificare target_project.

@@ -53,6 +53,24 @@ class CandidateIntegrityError(RuntimeError):
     registrato per intero in audit log."""
 
 
+class LegacyCandidateNotPromotableError(RuntimeError):
+    """Una candidate `pending_review` manca di una o più garanzie introdotte
+    da MF-FIX-004/MF-FIX-005 (staging_root, target_snapshot_hash, target_root
+    registrato, uno staging_manifest completo, o un diff manifest valido) e
+    perciò NON può essere approvata tramite una semplice transazione DB
+    (MF-FIX-006, bypass bloccante rimosso).
+
+    Non esiste alcuna promozione filesystem sicura per una candidate del
+    genere: senza staging_manifest non c'è nulla da riverificare byte per
+    byte, senza staging_root/target_root non c'è nulla da promuovere in modo
+    atomico. Blocco fail-closed PRIMA di qualunque scrittura: target
+    invariato, nessuna decisione approve creata, nessun backup creato,
+    evento registrato in audit. Queste candidate restano `pending_review`
+    per sempre a meno di un rifiuto manuale esplicito (`reject_candidate`) —
+    non vengono mai migrate automaticamente al nuovo formato né promosse
+    retroattivamente da file già presenti nel target."""
+
+
 class CandidateRecoveryRequiredError(RuntimeError):
     """Un tentativo di approvazione ha promosso lo staging sul target reale,
     ma un passo successivo (scrittura DB/audit) è fallito E anche il
