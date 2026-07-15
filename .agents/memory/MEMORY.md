@@ -1,3 +1,4 @@
 - [Python module install in pnpm monorepo](python-module-in-pnpm-monorepo.md) — `installLanguagePackages({language:"python"})` creates pyproject.toml/uv.lock/.pythonlibs at repo ROOT, not in a subproject folder; pytest works from any cwd.
 - [setupReplitAIIntegrations declined](ai-integration-declined-flow.md) — if the user declines the account upgrade prompt, don't retry; ask the user (AskQuestion) whether to provide their own key or proceed with a stubbed/fake fallback.
 - [Fail-closed real-AI-provider pattern](fail-closed-ai-provider-pattern.md) — how to add a real paid AI provider to a system that must never call it silently or leak secrets.
+- [OpenAI structured-output check-provider fix](openai-structured-output-check-provider.md) — Responses API + Structured Outputs replaces prompt-only JSON for check-provider; test via httpx.MockTransport, not by mocking .parse().

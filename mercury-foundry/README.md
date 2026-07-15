@@ -63,7 +63,7 @@ Il provider è selezionato tramite un registro esplicito (`mercury_foundry/ai/pr
 ## Cosa è reale e cosa è simulato (stato V0.2)
 
 - **Reali**: stato del progetto (SQLite, colonne di provenienza del provider su `attempts`/`candidates`, tabella `provider_calls`), transizioni del workflow, limite di 3 tentativi, esecuzione dei test (`pytest` via subprocess reale), audit log append-only, Approval Gate umano obbligatorio, patch/diff applicate e ispezionabili, sandbox isolata (`target_project/`), diagnostica `doctor`.
-- **Provider reale implementato ma spento di default**: `mercury_foundry/ai/real_provider.py` (`OpenAICompatibleProvider`, registrato come `"openai"` in `PROVIDER_REGISTRY`) parla con un endpoint compatibile con l'API "chat completions" di OpenAI. Non contiene alcuna credenziale, endpoint o modello hardcoded: tutto arriva da variabili d'ambiente (vedi sotto). Se queste non sono impostate, selezionare `--provider openai` fa fallire subito con un errore chiaro — **non è mai stata effettuata alcuna chiamata reale a pagamento durante lo sviluppo di V0.2** (nessuna credenziale era configurata in questo ambiente).
+- **Provider reale implementato ma spento di default**: `mercury_foundry/ai/real_provider.py` (`OpenAICompatibleProvider`, registrato come `"openai"` in `PROVIDER_REGISTRY`). Non contiene alcuna credenziale, endpoint o modello hardcoded: tutto arriva da variabili d'ambiente (vedi sotto). Se queste non sono impostate, selezionare `--provider openai` fa fallire subito con un errore chiaro. Il comando `check-provider` (unico punto che può fare una chiamata reale, e solo con `--confirm`) usa l'SDK ufficiale `openai`, la **Responses API** e **Structured Outputs con schema JSON stretto** (`strict=True`) — la risposta viene analizzata dall'SDK stesso (`response.output_parsed`), mai estraendo JSON da testo libero. `propose_plan`/`propose_patch` (usate dal ciclo Foundry completo) restano invece su chat completions "grezze" via HTTP iniettabile, non toccate da questa modifica.
 - **Simulato e dichiarato esplicitamente come tale**: `FakeModel` (`provider=fake-deterministic`, `is_simulated=True`) resta il provider di default. Nessun risultato di test è mai simulato, indipendentemente dal provider.
 - **Ancora mancante per V1**: un provider realmente esercitato con credenziali vere (richiede che l'utente fornisca `MERCURY_AI_API_KEY` e configuri modello/endpoint); interfacce diverse dalla CLI; deploy o azioni esterne oltre alla chiamata AI stessa.
 
@@ -90,8 +90,10 @@ Ogni chiamata al provider reale può fallire in questi modi, tutti gestiti come 
 
 - credenziali/configurazione mancanti (bloccato prima di qualunque chiamata, in `get_provider`);
 - timeout della chiamata;
-- modello non riconosciuto dal provider;
-- risposta malformata/non nel formato atteso;
+- modello non riconosciuto dal provider, o non supportato per gli structured output (`check-provider`);
+- rifiuto esplicito del modello (`check-provider`, Structured Outputs);
+- risposta incompleta/troncata dal provider (`check-provider`, Structured Outputs);
+- risposta malformata/non nel formato atteso, incluso un output che non rispetta lo schema JSON stretto richiesto;
 - limite di chiamate per run superato;
 - budget token per run superato;
 - budget di costo stimato per run superato.

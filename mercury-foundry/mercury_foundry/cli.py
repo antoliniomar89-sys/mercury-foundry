@@ -56,8 +56,8 @@ def cmd_check_provider(args: argparse.Namespace) -> int:
 
     print(f"[check-provider] provider reale confermato: '{provider.name}'. Eseguo una chiamata di prova...")
     try:
-        plan = provider.propose_plan(
-            "Rispondi SOLO con un array JSON con un solo elemento: la stringa 'connectivity check ok'."
+        result = provider.check_connectivity(
+            "Rispondi con status='ok' e un breve messaggio che confermi la connettività."
         )
     except ProviderExecutionError as exc:
         record = provider.last_call_record
@@ -72,11 +72,11 @@ def cmd_check_provider(args: argparse.Namespace) -> int:
         return 1
 
     record = provider.last_call_record
-    print(f"[check-provider] chiamata riuscita. Risposta: {plan}")
+    print(f"[check-provider] chiamata riuscita (Structured Outputs, schema stretto). Risposta: {result}")
     if record is not None:
         print(
-            f"  model={record.model} usage={record.usage} "
-            f"estimated_cost_usd={record.estimated_cost_usd}"
+            f"  provider={record.provider_name} model={record.model} "
+            f"usage={record.usage} estimated_cost_usd={record.estimated_cost_usd}"
         )
     return 0
 

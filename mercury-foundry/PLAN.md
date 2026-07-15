@@ -2,6 +2,17 @@
 
 Stato: **implementato e testato**. Questo documento descrive l'architettura come effettivamente costruita (non più una bozza pre-codice). V0 (ciclo end-to-end minimo), V0.1 (audit di sicurezza + `doctor` + rafforzamento del provider AI) e V0.2 (primo provider AI reale, spento di default) sono tutte complete.
 
+## -1.bis Correzione: Structured Outputs + Responses API per `check-provider`
+
+Prima versione di `check_connectivity` (dentro V0.2) riusava `propose_plan`, che imponeva il formato JSON solo via prompt e ne estraeva il contenuto da testo libero — fragile: un test manuale reale ha mostrato il modello rispondere con testo non-JSON, bloccato correttamente ma senza modo di ottenere un risultato utile in modo affidabile. Corretto con:
+
+- `OpenAICompatibleProvider.check_connectivity(prompt)`: metodo dedicato, isolato da `propose_plan`/`propose_patch` (che restano sul meccanismo HTTP grezzo precedente, non toccato).
+- Usa l'SDK ufficiale `openai` (client iniettabile, non più solo `http_post`) e la **Responses API** (`client.responses.parse`) con **Structured Outputs** a schema JSON stretto (`strict=True`, generato automaticamente dall'SDK da un modello Pydantic `ConnectivityCheckResult {status: Literal["ok"], message: str}` — il più piccolo schema utile).
+- Il parsing del contenuto avviene **tramite l'SDK** (`response.output_parsed`): mai un `json.loads` su testo libero per questo percorso.
+- Blocco fail-closed esteso con due nuove eccezioni (`ai/errors.py`): `ProviderRefusalError` (il modello rifiuta esplicitamente, rilevato da un content item `type="refusal"`, non da euristiche su testo) e `ProviderIncompleteResponseError` (risposta troncata/filtrata, `response.status == "incomplete"`). Un modello non supportato per structured output viene tradotto in `ProviderUnknownModelError` (stesso comportamento di un modello sconosciuto in chat completions); qualunque altro errore HTTP o di validazione dello schema diventa `ProviderMalformedResponseError`.
+- Test in `tests/test_check_provider_structured_output.py` (11 test) usano `httpx.MockTransport` per iniettare un trasporto HTTP fittizio nel client `openai` reale: la vera logica di parsing dell'SDK viene esercitata nei test, non solo una funzione mock nostra — mai una chiamata di rete reale.
+- Nessuna chiamata reale è stata eseguita durante questa correzione.
+
 ## -1. Cosa è cambiato in V0.2 rispetto a V0.1
 
 V0.1 aveva un registro provider fail-closed ma un solo provider implementato (`FakeModel`). V0.2 aggiunge il primo provider realmente collegabile a un'API a pagamento, senza mai eseguirne una chiamata automaticamente:

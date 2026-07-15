@@ -42,3 +42,11 @@ class ProviderMalformedResponseError(ProviderExecutionError):
 
 class ProviderUnknownModelError(ProviderExecutionError):
     """Il provider ha segnalato che il modello richiesto non esiste/non è accessibile."""
+
+
+class ProviderRefusalError(ProviderExecutionError):
+    """Il modello ha esplicitamente rifiutato di generare l'output richiesto."""
+
+
+class ProviderIncompleteResponseError(ProviderExecutionError):
+    """Il provider ha restituito una risposta incompleta (troncata o filtrata)."""
