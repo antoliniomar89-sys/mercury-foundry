@@ -24,6 +24,7 @@ def init_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(schema_sql)
     conn.commit()
     _migrate_provider_calls_columns(conn)
+    _migrate_goals_columns(conn)
 
 
 def _migrate_provider_calls_columns(conn: sqlite3.Connection) -> None:
@@ -48,4 +49,17 @@ def _migrate_provider_calls_columns(conn: sqlite3.Connection) -> None:
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_provider_calls_dedup "
         "ON provider_calls(run_id, provider_name, call_number)"
     )
+    conn.commit()
+
+
+def _migrate_goals_columns(conn: sqlite3.Connection) -> None:
+    """Aggiunge in modo idempotente `literal_constraints_json` a `goals`.
+
+    Stesso motivo/pattern di `_migrate_provider_calls_columns`: un DB creato
+    prima di questa colonna non la ha, e `CREATE TABLE IF NOT EXISTS` non la
+    aggiungerebbe da solo.
+    """
+    existing_columns = {row["name"] for row in conn.execute("PRAGMA table_info(goals)").fetchall()}
+    if "literal_constraints_json" not in existing_columns:
+        conn.execute("ALTER TABLE goals ADD COLUMN literal_constraints_json TEXT")
     conn.commit()

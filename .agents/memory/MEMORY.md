@@ -3,3 +3,4 @@
 - [Fail-closed real-AI-provider pattern](fail-closed-ai-provider-pattern.md) — how to add a real paid AI provider to a system that must never call it silently or leak secrets.
 - [OpenAI structured-output check-provider fix](openai-structured-output-check-provider.md) — Responses API + Structured Outputs replaces prompt-only JSON for check-provider; test via httpx.MockTransport, not by mocking .parse().
 - [Mercury Foundry Structured Outputs rollout](mercury-foundry-structured-outputs.md) — propose_plan/propose_patch/evaluation now share check-provider's strict-schema mechanism; known persistence gap on successful plan calls.
+- [Literal content enforcement pattern](literal-content-enforcement.md) — exact file paths/content/test commands must be engine-enforced deterministically, never left to model regeneration.

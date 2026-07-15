@@ -6,7 +6,12 @@ CREATE TABLE IF NOT EXISTS goals (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     description TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'open', -- open | in_progress | awaiting_approval | done | blocked
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    -- Vincoli letterali deterministici (JSON di `LiteralConstraints`, opzionale).
+    -- Su un DB pre-esistente (creato prima di questa colonna) questa colonna
+    -- viene aggiunta idempotentemente da `state.db._migrate_goals_columns`,
+    -- perché `CREATE TABLE IF NOT EXISTS` non altera una tabella già creata.
+    literal_constraints_json TEXT
 );
 
 CREATE TABLE IF NOT EXISTS tasks (

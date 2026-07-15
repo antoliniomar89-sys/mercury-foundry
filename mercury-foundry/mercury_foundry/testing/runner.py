@@ -22,11 +22,17 @@ class TestRunner:
     def __init__(self, sandbox_root: Path):
         self.sandbox_root = sandbox_root
 
-    def run(self) -> TestRunResult:
+    def run(self, command: list[str] | None = None) -> TestRunResult:
+        """Esegue i test reali. Se `command` è fornito (es. da un
+        `literal_constraints.exact_test_command`), esegue ESATTAMENTE quel
+        comando invece di affidarsi a qualunque file di test scritto dal
+        provider — questo è ciò che rende la verifica indipendente da test
+        "sempre veri" che il provider potrebbe aver generato."""
+        cmd = command if command is not None else ["python3", "-m", "pytest", "-q"]
         start = time.monotonic()
         try:
             proc = subprocess.run(
-                ["python3", "-m", "pytest", "-q"],
+                cmd,
                 cwd=str(self.sandbox_root),
                 capture_output=True,
                 text=True,

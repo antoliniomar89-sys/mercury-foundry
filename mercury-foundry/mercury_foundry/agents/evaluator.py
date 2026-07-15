@@ -18,6 +18,6 @@ class Evaluator:
     def __init__(self, test_runner: TestRunner):
         self.test_runner = test_runner
 
-    def evaluate(self) -> EvalResult:
-        result: TestRunResult = self.test_runner.run()
+    def evaluate(self, command: list[str] | None = None) -> EvalResult:
+        result: TestRunResult = self.test_runner.run(command=command)
         return EvalResult(passed=result.passed, output=result.output, duration_ms=result.duration_ms)

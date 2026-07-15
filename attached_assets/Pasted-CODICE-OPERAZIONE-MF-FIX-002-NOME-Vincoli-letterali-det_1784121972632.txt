@@ -1,0 +1,110 @@
+CODICE OPERAZIONE: MF-FIX-002
+NOME: Vincoli letterali deterministici e verifica esatta
+
+Non effettuare chiamate reali al provider.
+Non approvare il candidato attualmente pending_review.
+Non modificare target_project durante questo intervento.
+
+CONTESTO
+
+Il run MF-RUN-001B ha dimostrato che:
+
+- la pipeline reale funziona;
+- Structured Outputs, budget, audit, provider_calls e gate umano funzionano;
+- il modello ha però alterato il contenuto letterale richiesto dei file;
+- il candidato è rimasto correttamente pending_review.
+
+PROBLEMA ARCHITETTURALE
+
+Quando una specifica contiene:
+
+- un percorso file esatto;
+- un contenuto completo esatto;
+- un comando di test esatto;
+- vincoli byte-per-byte;
+
+questi elementi non devono essere rigenerati liberamente dal modello.
+
+Devono essere conservati come literal constraints deterministici e applicati o verificati dal motore della Foundry.
+
+OBIETTIVO
+
+Aggiungere un meccanismo generale di vincoli letterali, senza introdurre logica specifica soltanto per MERCURY_FOUNDRY_PROBE.md.
+
+REQUISITI
+
+1. Estendere la specifica interna con literal_constraints strutturati, capaci di rappresentare almeno:
+
+   - exact_file_path;
+   - exact_file_content;
+   - allowed_files;
+   - forbidden_extra_files;
+   - exact_test_command;
+   - byte_exact_required.
+
+2. Il testo letterale fornito dall’utente deve essere conservato senza:
+   - parafrasi;
+   - correzioni;
+   - traduzioni;
+   - virgolette aggiuntive;
+   - spazi o righe indesiderati.
+
+3. Il provider AI può:
+   - pianificare;
+   - motivare;
+   - proporre operazioni coerenti.
+
+   Non può sovrascrivere o reinterpretare i literal_constraints.
+
+4. Prima dell’applicazione della patch, il motore deve confrontare la proposta del provider con i vincoli letterali.
+
+5. Se la proposta diverge:
+   - correggila deterministicamente solo quando il vincolo fornisce già integralmente percorso e contenuto;
+   - altrimenti blocca il candidato in modalità fail-closed.
+
+6. La verifica deve controllare:
+   - uguaglianza byte-per-byte;
+   - esistenza dei soli file consentiti;
+   - assenza di file accessori persistenti;
+   - assenza di virgolette o newline finali non richiesti.
+
+7. Il comando di test esatto deve essere eseguito dal motore, non riscritto dal modello.
+
+8. Conserva:
+   - sandbox;
+   - limiti di budget;
+   - limiti di chiamate e tentativi;
+   - audit append-only;
+   - provider_calls;
+   - gate umano obbligatorio.
+
+9. Il candidato fallito di MF-RUN-001B deve restare non approvato. Non promuoverlo.
+
+TEST RICHIESTI
+
+Aggiungi test mockati per:
+
+- conservazione esatta del contenuto letterale;
+- protezione da parafrasi del modello;
+- rimozione o rifiuto di virgolette aggiuntive;
+- newline finale consentito o vietato secondo la specifica;
+- blocco di file extra;
+- path esatto;
+- comando di test esatto;
+- correzione deterministica quando contenuto e percorso sono completamente definiti;
+- fail-closed quando la correzione deterministica non è possibile;
+- candidato ancora bloccato al gate umano;
+- regressione completa della suite esistente.
+
+DOPO L’IMPLEMENTAZIONE
+
+1. Esegui tutta la suite di test.
+2. Non effettuare chiamate reali.
+3. Non modificare target_project.
+4. Riporta:
+   - numero totale dei test;
+   - file modificati;
+   - struttura dei literal_constraints;
+   - esempio mockato del contenuto prima e dopo la normalizzazione deterministica;
+   - conferma che il candidato precedente non sia stato approvato;
+   - comando esatto per un nuovo run reale denominato MF-RUN-002.

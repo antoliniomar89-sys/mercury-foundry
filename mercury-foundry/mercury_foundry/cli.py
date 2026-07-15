@@ -13,14 +13,29 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from pathlib import Path
 
 from mercury_foundry.ai.errors import ProviderExecutionError
 from mercury_foundry.ai.provider_factory import ProviderUnavailableError, get_provider
 from mercury_foundry.approval import gate
 from mercury_foundry.audit.logger import list_audit_log
 from mercury_foundry.diagnostics import run_doctor
+from mercury_foundry.policy.literal_constraints import LiteralConstraints
 from mercury_foundry.state import models
 from mercury_foundry.wiring import build_foundry
+
+
+def _load_literal_constraints(path: str | None) -> LiteralConstraints | None:
+    """Carica un `LiteralConstraints` da un file JSON, se `path` è fornito.
+
+    Nessun default silenzioso: un percorso inesistente o un JSON malformato
+    fa fallire subito il comando (`FileNotFoundError`/`json.JSONDecodeError`),
+    invece di sottomettere il goal senza i vincoli richiesti.
+    """
+    if not path:
+        return None
+    raw = Path(path).read_text(encoding="utf-8")
+    return LiteralConstraints.from_dict(json.loads(raw))
 
 
 def cmd_check_provider(args: argparse.Namespace) -> int:
@@ -98,7 +113,11 @@ def cmd_submit(args: argparse.Namespace) -> int:
         f"{_simulated_tag(foundry.ai_provider.is_simulated)} (is_simulated={foundry.ai_provider.is_simulated})"
     )
 
-    goal_id = foundry.orchestrator.submit_goal(args.description)
+    literal_constraints = _load_literal_constraints(args.literal_constraints)
+    if literal_constraints is not None:
+        print(f"[literal_constraints] caricati da {args.literal_constraints}: {literal_constraints.to_dict()}")
+
+    goal_id = foundry.orchestrator.submit_goal(args.description, literal_constraints=literal_constraints)
     print(f"[goal] creato goal_id={goal_id}: {args.description}")
 
     goal_run = foundry.orchestrator.run_goal(goal_id)
@@ -199,6 +218,17 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_submit = subparsers.add_parser("submit", help="sottomette un obiettivo ed esegue il ciclo completo")
     p_submit.add_argument("description", help="descrizione testuale dell'obiettivo")
+    p_submit.add_argument(
+        "--literal-constraints",
+        default=None,
+        help=(
+            "percorso a un file JSON con vincoli letterali deterministici "
+            "(LiteralConstraints: exact_file_path, exact_file_content, allowed_files, "
+            "forbidden_extra_files, exact_test_command, byte_exact_required). Il testo "
+            "letterale qui non viene mai rigenerato dal provider AI: è applicato o "
+            "verificato deterministicamente dal motore."
+        ),
+    )
     p_submit.set_defaults(func=cmd_submit)
 
     p_status = subparsers.add_parser("status", help="mostra lo stato di goal/task/candidate")

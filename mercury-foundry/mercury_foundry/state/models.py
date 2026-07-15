@@ -13,10 +13,13 @@ def _now() -> str:
 
 # --- goals -----------------------------------------------------------------
 
-def create_goal(conn: sqlite3.Connection, description: str) -> int:
+def create_goal(
+    conn: sqlite3.Connection, description: str, literal_constraints_json: str | None = None
+) -> int:
     cur = conn.execute(
-        "INSERT INTO goals (description, status, created_at) VALUES (?, 'open', ?)",
-        (description, _now()),
+        "INSERT INTO goals (description, status, created_at, literal_constraints_json) "
+        "VALUES (?, 'open', ?, ?)",
+        (description, _now(), literal_constraints_json),
     )
     conn.commit()
     return cur.lastrowid

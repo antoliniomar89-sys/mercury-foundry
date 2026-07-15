@@ -9,6 +9,7 @@ pass/fail sono decisi qui da codice deterministico, mai dal modello.
 
 from __future__ import annotations
 
+import shlex
 import sqlite3
 from dataclasses import dataclass
 
@@ -17,6 +18,8 @@ from mercury_foundry.agents.builder import Builder
 from mercury_foundry.agents.evaluator import Evaluator
 from mercury_foundry.ai.errors import ProviderExecutionError
 from mercury_foundry.audit.logger import log_action
+from mercury_foundry.policy.errors import LiteralConstraintViolationError
+from mercury_foundry.policy.literal_constraints import LiteralConstraints, verify_literal_constraints
 from mercury_foundry.state import models
 
 
@@ -61,6 +64,16 @@ class ExecutionLoop:
         goal_id = task["goal_id"]
         description = task["description"]
 
+        goal_row = models.get_goal(self.conn, goal_id)
+        literal_constraints = LiteralConstraints.from_json(
+            goal_row["literal_constraints_json"] if goal_row is not None else None
+        )
+        exact_test_command = (
+            shlex.split(literal_constraints.exact_test_command)
+            if literal_constraints is not None and literal_constraints.exact_test_command
+            else None
+        )
+
         models.update_task_status(self.conn, task_id, "in_progress")
         log_action(
             self.conn,
@@ -85,7 +98,45 @@ class ExecutionLoop:
             )
 
             try:
-                build_result = self.builder.build(description, attempt_number, previous_failure)
+                build_result = self.builder.build(
+                    description, attempt_number, previous_failure, literal_constraints
+                )
+            except LiteralConstraintViolationError as exc:
+                # La chiamata al provider È avvenuta con successo (altrimenti sarebbe
+                # stata sollevata ProviderExecutionError sopra): va comunque registrata
+                # in provider_calls. È l'ENFORCEMENT deterministico del motore, non il
+                # provider, a bloccare qui — la proposta divergeva da un
+                # literal_constraint e non era correggibile in modo sicuro.
+                _persist_call_record(
+                    self.conn,
+                    goal_id=goal_id,
+                    task_id=task_id,
+                    attempt_id=attempt_id,
+                    record=self.builder.ai_provider.last_call_record,
+                )
+                log_action(
+                    self.conn,
+                    entity_type="attempt",
+                    entity_id=attempt_id,
+                    action="LITERAL_CONSTRAINT_BLOCKED",
+                    actor="system",
+                    payload={"attempt_number": attempt_number, "reason": str(exc)},
+                )
+                models.update_attempt(
+                    self.conn, attempt_id, phase="BLOCKED", status="failure", close=True
+                )
+                models.update_task_status(self.conn, task_id, "blocked")
+                log_action(
+                    self.conn,
+                    entity_type="task",
+                    entity_id=task_id,
+                    action="TASK_BLOCKED",
+                    actor="system",
+                    payload={"reason": "literal_constraint_violation", "message": str(exc)},
+                )
+                # Fail-closed: nessuna scrittura è avvenuta in sandbox; niente da
+                # correggere con un altro tentativo automatico, serve intervento umano.
+                return TaskOutcome(task_id=task_id, status="blocked", attempts_used=attempt_number)
             except ProviderExecutionError as exc:
                 _persist_call_record(
                     self.conn,
@@ -153,6 +204,23 @@ class ExecutionLoop:
                     "diff": build_result.diff_text,
                 },
             )
+            if literal_constraints is not None:
+                # Audit trail dell'enforcement deterministico, anche quando non
+                # ha dovuto correggere nulla (per trasparenza: si può sempre
+                # verificare che l'assenza di correzioni non nasconda una
+                # divergenza non rilevata).
+                log_action(
+                    self.conn,
+                    entity_type="attempt",
+                    entity_id=attempt_id,
+                    action="LITERAL_CONSTRAINTS_ENFORCED",
+                    actor="system",
+                    payload={
+                        "corrected": build_result.enforcement.corrected,
+                        "dropped_files": build_result.enforcement.dropped_files,
+                        "notes": build_result.enforcement.notes,
+                    },
+                )
 
             models.update_attempt(self.conn, attempt_id, phase="TEST")
             log_action(
@@ -163,7 +231,7 @@ class ExecutionLoop:
                 actor="system",
                 payload={},
             )
-            eval_result = self.evaluator.evaluate()
+            eval_result = self.evaluator.evaluate(command=exact_test_command)
             models.record_test_result(
                 self.conn,
                 attempt_id,
@@ -186,6 +254,49 @@ class ExecutionLoop:
             )
 
             if eval_result.passed:
+                literal_result = verify_literal_constraints(self.builder.workspace.root, literal_constraints)
+                if literal_constraints is not None:
+                    models.record_test_result(
+                        self.conn,
+                        attempt_id,
+                        test_name="literal_constraints_check",
+                        passed=literal_result.passed,
+                        output="; ".join(literal_result.reasons) if literal_result.reasons else "ok",
+                        duration_ms=0,
+                    )
+                    log_action(
+                        self.conn,
+                        entity_type="attempt",
+                        entity_id=attempt_id,
+                        action="LITERAL_VERIFICATION_COMPLETED",
+                        actor="system",
+                        payload={"passed": literal_result.passed, "reasons": literal_result.reasons},
+                    )
+
+                if not literal_result.passed:
+                    # Trattata come un fallimento di verifica: stesso percorso di un
+                    # fallimento pytest (FIX se restano tentativi, altrimenti blocco),
+                    # perché la divergenza qui è stata rilevata SOLO in fase di
+                    # verifica post-scrittura (es. vincolo parzialmente specificato,
+                    # oppure file accessori ricomparsi dopo l'enforcement).
+                    models.update_attempt(self.conn, attempt_id, phase="FIX", status="failure", close=True)
+                    previous_failure = (
+                        "Verifica letterale deterministica fallita: " + "; ".join(literal_result.reasons)
+                    )
+                    log_action(
+                        self.conn,
+                        entity_type="attempt",
+                        entity_id=attempt_id,
+                        action="FIX_REQUIRED" if attempt_number < config.MAX_ATTEMPTS else "MAX_ATTEMPTS_REACHED",
+                        actor="system",
+                        payload={
+                            "attempt_number": attempt_number,
+                            "max_attempts": config.MAX_ATTEMPTS,
+                            "reason": "literal_verification_failed",
+                        },
+                    )
+                    continue
+
                 models.update_attempt(self.conn, attempt_id, phase="VERIFY", status="success", close=True)
                 log_action(
                     self.conn,

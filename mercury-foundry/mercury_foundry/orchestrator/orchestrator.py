@@ -10,6 +10,7 @@ from mercury_foundry.ai.provider import AIProvider
 from mercury_foundry.audit.logger import log_action
 from mercury_foundry.execution.loop import ExecutionLoop, TaskOutcome
 from mercury_foundry.orchestrator.decomposition import decompose_goal
+from mercury_foundry.policy.literal_constraints import LiteralConstraints
 from mercury_foundry.state import models
 
 
@@ -26,8 +27,12 @@ class Orchestrator:
         self.ai_provider = ai_provider
         self.execution_loop = execution_loop
 
-    def submit_goal(self, description: str) -> int:
-        goal_id = models.create_goal(self.conn, description)
+    def submit_goal(self, description: str, literal_constraints: LiteralConstraints | None = None) -> int:
+        goal_id = models.create_goal(
+            self.conn,
+            description,
+            literal_constraints_json=literal_constraints.to_json() if literal_constraints is not None else None,
+        )
         # Un goal sottomesso è, in questo sistema, un "run" del Foundry: PLAN
         # (qui) e BUILD (in ExecutionLoop, sullo stesso goal) condividono lo
         # stesso run_id, così ogni chiamata reale del provider durante
