@@ -222,6 +222,20 @@ def update_candidate_status(conn: sqlite3.Connection, candidate_id: int, status:
     conn.commit()
 
 
+def update_candidate_status_no_commit(conn: sqlite3.Connection, candidate_id: int, status: str) -> None:
+    """Come `update_candidate_status`, ma SENZA commit: usata dall'Approval
+    Gate (MF-FIX-005) per far partecipare questa scrittura a una singola
+    transazione DB coordinata insieme a `create_decision_no_commit` e
+    `log_action(..., commit=False)`. Il chiamante è responsabile di
+    chiamare `conn.commit()` (successo) o `conn.rollback()` (fallimento)."""
+    conn.execute("UPDATE candidates SET status = ? WHERE id = ?", (status, candidate_id))
+
+
+def set_candidate_backup_root(conn: sqlite3.Connection, candidate_id: int, backup_root: str | None) -> None:
+    conn.execute("UPDATE candidates SET backup_root = ? WHERE id = ?", (backup_root, candidate_id))
+    conn.commit()
+
+
 def get_candidate(conn: sqlite3.Connection, candidate_id: int) -> sqlite3.Row | None:
     return conn.execute("SELECT * FROM candidates WHERE id = ?", (candidate_id,)).fetchone()
 
@@ -253,6 +267,26 @@ def create_decision(
         (task_id, candidate_id, decision_type, actor, rationale, _now()),
     )
     conn.commit()
+    return cur.lastrowid
+
+
+def create_decision_no_commit(
+    conn: sqlite3.Connection,
+    *,
+    task_id: int | None,
+    candidate_id: int | None,
+    decision_type: str,
+    actor: str,
+    rationale: str | None,
+) -> int:
+    """Come `create_decision`, ma SENZA commit — vedi `update_candidate_status_no_commit`."""
+    cur = conn.execute(
+        """
+        INSERT INTO decisions (task_id, candidate_id, decision_type, actor, rationale, created_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (task_id, candidate_id, decision_type, actor, rationale, _now()),
+    )
     return cur.lastrowid
 
 
@@ -385,14 +419,24 @@ def persist_provider_call_record(
     )
 
 
-def associate_candidate_provider_calls(conn: sqlite3.Connection, task_id: int, candidate_id: int) -> None:
-    """Collega le provider_calls di un task alla candidate creata, in modo
-    APPEND-ONLY: inserisce righe in `candidate_provider_calls`, non aggiorna
-    mai `provider_calls` (che resta append-only e immutabile riga per riga,
-    per riga già scritta). Idempotente: rilanciare questa funzione per la
-    stessa (task, candidate) non produce righe duplicate (INSERT OR IGNORE
-    contro l'indice univoco della tabella)."""
-    calls = list_provider_calls_for_task(conn, task_id)
+def associate_candidate_provider_calls(conn: sqlite3.Connection, run_id: str, candidate_id: int) -> None:
+    """Collega TUTTE le provider_calls di un run (PLAN, BUILD/PATCH, FIX,
+    EVALUATION) alla candidate creata da quel run, in modo APPEND-ONLY:
+    inserisce righe in `candidate_provider_calls`, non aggiorna mai
+    `provider_calls` (che resta append-only e immutabile riga per riga).
+
+    MF-FIX-005 (gap 3): collega per `run_id`, non per `task_id`. La chiamata
+    PLAN (fatta dall'Orchestrator prima che esista un task) ha `task_id`
+    NULL: collegare solo per `task_id` la escluderebbe sempre dal totale
+    token/costo della candidate, sottostimando la spesa reale del run.
+    Collegare per `run_id` include automaticamente anche i tentativi FALLITI
+    (attempt 1/2 di un task con retry): sono comunque chiamate reali già
+    pagate, e il totale del run deve rendicontarle.
+
+    Idempotente: rilanciare questa funzione per la stessa (run, candidate)
+    non produce righe duplicate (INSERT OR IGNORE contro l'indice univoco
+    della tabella)."""
+    calls = list_provider_calls_for_run(conn, run_id)
     now = _now()
     for call in calls:
         conn.execute(
@@ -422,6 +466,14 @@ def list_candidate_provider_calls(conn: sqlite3.Connection, candidate_id: int) -
 def list_provider_calls_for_task(conn: sqlite3.Connection, task_id: int) -> list[sqlite3.Row]:
     return conn.execute(
         "SELECT * FROM provider_calls WHERE task_id = ? ORDER BY id ASC", (task_id,)
+    ).fetchall()
+
+
+def list_provider_calls_for_run(conn: sqlite3.Connection, run_id: str) -> list[sqlite3.Row]:
+    """Tutte le provider_calls di un run (PLAN + ogni tentativo BUILD/FIX di
+    ogni task del run), incluse quelle con `task_id` NULL (es. PLAN)."""
+    return conn.execute(
+        "SELECT * FROM provider_calls WHERE run_id = ? ORDER BY id ASC", (run_id,)
     ).fetchall()
 
 

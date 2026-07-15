@@ -2,8 +2,6 @@
 
 import sqlite3
 
-import pytest
-
 from mercury_foundry.approval import gate
 from mercury_foundry.audit.logger import list_audit_log, log_action
 from mercury_foundry.state import models
@@ -44,7 +42,7 @@ def test_rejecting_a_candidate_blocks_the_goal_and_never_marks_it_done(tmp_path)
     assert candidate["status"] == "rejected"
 
 
-def test_approving_a_candidate_twice_is_rejected(tmp_path):
+def test_approving_a_candidate_twice_is_idempotent_and_safe(tmp_path):
     foundry = build_foundry(
         db_path=tmp_path / "mercury_foundry.db",
         sandbox_root=tmp_path / "target_project",
@@ -54,9 +52,20 @@ def test_approving_a_candidate_twice_is_rejected(tmp_path):
     goal_run = foundry.orchestrator.run_goal(goal_id)
     candidate_id = goal_run.task_outcomes[0].candidate_id
 
-    gate.approve_candidate(foundry.conn, candidate_id)
-    with pytest.raises(gate.InvalidCandidateStateError):
-        gate.approve_candidate(foundry.conn, candidate_id)
+    gate.approve_candidate(foundry.conn, candidate_id, backup_base_dir=foundry.backup_base_dir)
+    # MF-FIX-005: approve è idempotente — una seconda chiamata su una
+    # candidate già approvata NON solleva più un errore, è un no-op sicuro
+    # (nessuna riscrittura di filesystem/DB, nessun decision/audit duplicato).
+    candidate_before_second_call = models.get_candidate(foundry.conn, candidate_id)
+    audit_rows_before = list_audit_log(foundry.conn, limit=1000)
+
+    gate.approve_candidate(foundry.conn, candidate_id, backup_base_dir=foundry.backup_base_dir)
+
+    candidate_after_second_call = models.get_candidate(foundry.conn, candidate_id)
+    assert dict(candidate_after_second_call) == dict(candidate_before_second_call)
+    audit_rows_after = list_audit_log(foundry.conn, limit=1000)
+    assert len(audit_rows_after) == len(audit_rows_before) + 1
+    assert audit_rows_after[-1]["action"] == "CANDIDATE_APPROVE_NOOP_ALREADY_APPROVED"
 
 
 def test_audit_log_is_append_only_previous_rows_never_change(tmp_path):

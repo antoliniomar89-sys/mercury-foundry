@@ -236,7 +236,10 @@ def test_real_provider_end_to_end_workflow_with_structured_mocked_responses(tmp_
     # di questo task. Il doppio-reject-rifiutato è già coperto da
     # `test_audit_and_approval.py`; qui si passa direttamente al percorso
     # principale del test: l'approvazione reale.
-    gate.approve_candidate(conn, outcome.candidate_id, rationale="Workflow end-to-end mockato superato")
+    gate.approve_candidate(
+        conn, outcome.candidate_id, rationale="Workflow end-to-end mockato superato",
+        backup_base_dir=tmp_path / "mf_backups",
+    )
     candidate_after = models.get_candidate(conn, outcome.candidate_id)
     assert candidate_after["status"] == "approved"
 

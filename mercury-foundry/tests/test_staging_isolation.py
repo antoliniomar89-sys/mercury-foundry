@@ -185,7 +185,7 @@ def test_approve_candidate_promotes_staging_diff_atomically(tmp_path):
     goal_run = orchestrator.run_goal(goal_id)
     outcome = goal_run.task_outcomes[0]
 
-    gate.approve_candidate(conn, outcome.candidate_id)
+    gate.approve_candidate(conn, outcome.candidate_id, backup_base_dir=tmp_path / "mf_backups")
 
     assert (workspace.root / "capability.py").read_text(encoding="utf-8") == "def get_value():\n    return 42\n"
     assert (workspace.root / "tests" / "test_capability.py").exists()
@@ -265,7 +265,7 @@ def test_approve_candidate_blocks_fail_closed_on_target_conflict(tmp_path):
     (workspace.root / "changed_after_candidate.md").write_text("sorpresa\n", encoding="utf-8")
 
     with pytest.raises(TargetConflictError):
-        gate.approve_candidate(conn, outcome.candidate_id)
+        gate.approve_candidate(conn, outcome.candidate_id, backup_base_dir=tmp_path / "mf_backups")
 
     # Fail-closed: nessuna scrittura, la candidate resta pending_review, e il
     # cambiamento "sorpresa" del target non è stato toccato né sovrascritto.
@@ -296,7 +296,7 @@ def test_two_candidates_from_different_tasks_have_independent_staging(tmp_path):
     assert Path(candidate_a["staging_root"]).exists()
     assert Path(candidate_b["staging_root"]).exists()
 
-    gate.approve_candidate(conn, candidate_a["id"])
+    gate.approve_candidate(conn, candidate_a["id"], backup_base_dir=tmp_path / "mf_backups")
 
     # Lo staging della candidate B (non ancora approvata) è ancora intatto.
     assert Path(candidate_b["staging_root"]).exists()
@@ -431,15 +431,16 @@ def test_candidate_provider_call_linkage_is_append_only_and_idempotent(tmp_path)
     )
     conn.commit()
 
-    models.associate_candidate_provider_calls(conn, outcome.task_id, outcome.candidate_id)
+    run_id = str(goal_id)
+    models.associate_candidate_provider_calls(conn, run_id, outcome.candidate_id)
     linked_calls = models.list_candidate_provider_calls(conn, outcome.candidate_id)
     assert len(linked_calls) >= 1
 
     rows_before = conn.execute("SELECT * FROM candidate_provider_calls ORDER BY id").fetchall()
 
-    # Rilanciare l'associazione per la stessa (task, candidate) non deve
+    # Rilanciare l'associazione per lo stesso (run, candidate) non deve
     # produrre righe duplicate né modificare quelle esistenti.
-    models.associate_candidate_provider_calls(conn, outcome.task_id, outcome.candidate_id)
+    models.associate_candidate_provider_calls(conn, run_id, outcome.candidate_id)
     rows_after = conn.execute("SELECT * FROM candidate_provider_calls ORDER BY id").fetchall()
     assert len(rows_after) == len(rows_before)
 
@@ -474,7 +475,9 @@ def test_full_mocked_end_to_end_happy_path_to_approved(tmp_path):
     assert candidate["status"] == "pending_review"
     assert not (workspace.root / "capability.py").exists()
 
-    gate.approve_candidate(conn, outcome.candidate_id, rationale="approvato in test")
+    gate.approve_candidate(
+        conn, outcome.candidate_id, rationale="approvato in test", backup_base_dir=tmp_path / "mf_backups"
+    )
 
     candidate_after = models.get_candidate(conn, outcome.candidate_id)
     assert candidate_after["status"] == "approved"

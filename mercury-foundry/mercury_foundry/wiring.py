@@ -27,6 +27,7 @@ class Foundry:
     ai_provider: AIProvider
     workspace: Workspace
     orchestrator: Orchestrator
+    backup_base_dir: Path
 
 
 def build_foundry(
@@ -35,6 +36,7 @@ def build_foundry(
     sandbox_root: Path | str | None = None,
     provider_name: str | None = None,
     staging_base_dir: Path | str | None = None,
+    backup_base_dir: Path | str | None = None,
 ) -> Foundry:
     conn = db.connect(db_path)
     ai_provider = get_provider(provider_name)
@@ -51,9 +53,26 @@ def build_foundry(
     else:
         resolved_staging_base_dir = config.STAGING_BASE_DIR
 
+    if backup_base_dir is not None:
+        resolved_backup_base_dir = Path(backup_base_dir)
+    elif sandbox_root is not None:
+        # Stesso motivo dello staging co-locato: i backup dell'Approval Gate
+        # (MF-FIX-005) non devono finire nella cartella condivisa
+        # `config.BACKUP_BASE_DIR` del progetto reale quando si usa un
+        # target isolato (es. `tmp_path` nei test).
+        resolved_backup_base_dir = Path(sandbox_root).resolve().parent / "mf_backups"
+    else:
+        resolved_backup_base_dir = config.BACKUP_BASE_DIR
+
     builder = Builder(ai_provider, workspace)
     evaluator = Evaluator(TestRunner(workspace.root))
     execution_loop = ExecutionLoop(conn, builder, evaluator, staging_base_dir=resolved_staging_base_dir)
     orchestrator = Orchestrator(conn, ai_provider, execution_loop)
 
-    return Foundry(conn=conn, ai_provider=ai_provider, workspace=workspace, orchestrator=orchestrator)
+    return Foundry(
+        conn=conn,
+        ai_provider=ai_provider,
+        workspace=workspace,
+        orchestrator=orchestrator,
+        backup_base_dir=resolved_backup_base_dir,
+    )

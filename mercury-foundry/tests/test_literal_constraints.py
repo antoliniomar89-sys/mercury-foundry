@@ -421,7 +421,7 @@ def test_execution_loop_deterministically_corrects_paraphrased_content(tmp_path)
     assert staged == constraints.exact_file_content
     assert not (workspace.root / "PROBE.md").exists()
 
-    gate.approve_candidate(conn, outcome.candidate_id)
+    gate.approve_candidate(conn, outcome.candidate_id, backup_base_dir=tmp_path / "mf_backups")
     written = (workspace.root / "PROBE.md").read_text(encoding="utf-8")
     assert written == constraints.exact_file_content
 
@@ -537,7 +537,7 @@ def test_engine_runs_exact_test_command_not_the_providers_generic_test(tmp_path)
     from mercury_foundry.approval import gate
     from mercury_foundry.state import models
 
-    gate.approve_candidate(conn, outcome.candidate_id)
+    gate.approve_candidate(conn, outcome.candidate_id, backup_base_dir=tmp_path / "mf_backups")
     assert (workspace.root / "PROBE.md").read_text(encoding="utf-8") == constraints.exact_file_content
 
 

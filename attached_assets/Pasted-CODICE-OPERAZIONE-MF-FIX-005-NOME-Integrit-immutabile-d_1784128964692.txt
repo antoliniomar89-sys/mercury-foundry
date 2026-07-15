@@ -1,0 +1,260 @@
+CODICE OPERAZIONE: MF-FIX-005
+NOME: Integrità immutabile della candidate e approvazione coerente
+
+Non effettuare chiamate reali al provider.
+Non eseguire MF-RUN-003.
+Non approvare o promuovere candidate reali esistenti.
+Non modificare manualmente target_project.
+
+CONTESTO
+
+MF-FIX-004 ha introdotto:
+
+- staging separato per attempt;
+- BUILD, TEST e VERIFY eseguiti nello staging;
+- target_project immutato fino all’approvazione;
+- promozione tramite Approval Gate;
+- ambiente test sanitizzato;
+- relazione append-only candidate_provider_calls.
+
+L’audit sul commit 5d9c876 ha però individuato tre gap residui.
+
+GAP 1 — INTEGRITÀ DELLO STAGING
+
+La candidate conserva manifest e hash finali, ma approve_candidate verifica soltanto che target_project non sia cambiato.
+
+Lo staging potrebbe quindi essere modificato dopo la creazione della candidate e prima dell’approvazione.
+
+GAP 2 — COERENZA FILESYSTEM/DATABASE
+
+La promozione del filesystem avviene prima del completamento degli aggiornamenti database e audit.
+
+Se il filesystem viene promosso ma una scrittura SQLite successiva fallisce, target_project e stato della candidate possono divergere.
+
+GAP 3 — CONTABILITÀ INCOMPLETA DEL RUN
+
+candidate_provider_calls collega principalmente le chiamate associate al task.
+
+La chiamata PLAN può avere task_id nullo e quindi restare esclusa dalla candidate, dai token totali e dal costo totale.
+
+OBIETTIVO
+
+Rendere una candidate:
+
+- immutabile;
+- verificabile;
+- promuovibile in modo coerente;
+- economicamente attribuita all’intero run;
+- recuperabile in caso di errore.
+
+REQUISITI
+
+1. VERIFICA DELLO STAGING PRIMA DELL’APPROVAZIONE
+
+Prima di promuovere una candidate:
+
+- ricalcola il manifest completo dello staging;
+- confrontalo con il manifest salvato al momento della creazione;
+- verifica esattamente:
+  - file creati;
+  - file modificati;
+  - file eliminati;
+  - hash;
+  - dimensioni;
+  - contenuti soggetti a literal constraints;
+- verifica che non esistano file extra;
+- blocca fail-closed in caso di qualsiasi divergenza.
+
+2. STAGING IMMUTABILE
+
+Dopo la creazione della candidate pending_review:
+
+- rendi lo staging read-only quando il filesystem lo consente;
+- considera comunque il controllo del manifest obbligatorio;
+- non affidarti soltanto ai permessi filesystem;
+- registra nell’audit eventuali tentativi o rilevamenti di manomissione.
+
+3. ERRORE DI INTEGRITÀ
+
+Aggiungi un errore esplicito, per esempio:
+
+CandidateIntegrityError
+
+In caso di errore:
+
+- non modificare target_project;
+- non cambiare la candidate in approved;
+- conserva pending_review oppure spostala in uno stato bloccato esplicito;
+- registra audit completo senza valori sensibili.
+
+4. APPROVAZIONE COERENTE FILESYSTEM/DATABASE
+
+Implementa una procedura coordinata:
+
+A. verifica candidate pending_review;
+B. verifica target invariato;
+C. verifica staging invariato;
+D. crea backup o snapshot ripristinabile del target;
+E. avvia transazione database;
+F. promuove atomicamente lo staging;
+G. scrive decisione, audit e stato approved;
+H. esegue commit database;
+I. elimina staging e backup soltanto dopo il successo completo.
+
+Se qualsiasi operazione dopo la promozione filesystem fallisce:
+
+- rollback database;
+- ripristino completo del target dal backup;
+- candidate non approved;
+- audit dell’errore attraverso un percorso recuperabile;
+- nessuno stato intermedio silenzioso.
+
+5. RECOVERY ESPLICITO
+
+Se anche il ripristino fallisce:
+
+- non dichiarare successo;
+- registra uno stato di recovery_required;
+- conserva backup e staging;
+- mostra istruzioni diagnostiche;
+- non effettuare altri tentativi automatici.
+
+6. APPROVAZIONE IDEMPOTENTE
+
+Una candidate già approved non può essere promossa una seconda volta.
+
+Una richiesta duplicata deve:
+
+- non riscrivere il filesystem;
+- non duplicare decisioni;
+- non duplicare audit;
+- restituire uno stato chiaro e sicuro.
+
+7. RIFIUTO IDEMPOTENTE
+
+Reject deve:
+
+- essere applicabile solo a pending_review;
+- eliminare o invalidare lo staging;
+- non modificare target_project;
+- non creare decisioni duplicate;
+- impedire una successiva approvazione della candidate rifiutata.
+
+8. ASSOCIAZIONE COMPLETA DELLE PROVIDER CALL
+
+Collega alla candidate tutte le provider_calls appartenenti al medesimo run_id, incluse almeno:
+
+- PLAN;
+- BUILD/PATCH;
+- eventuale FIX;
+- eventuale EVALUATION AI.
+
+Non usare soltanto task_id.
+
+La relazione candidate_provider_calls deve restare append-only e senza duplicati.
+
+9. CONTABILITÀ COMPLETA
+
+Il manifest/report della candidate deve calcolare:
+
+- numero totale di chiamate del run;
+- token input totali;
+- token output totali;
+- token complessivi;
+- costo totale;
+- dettaglio per operazione;
+- provider e modello per ciascuna chiamata.
+
+Non alterare retroattivamente provider_calls.
+
+10. CONCORRENZA
+
+Due candidate basate sullo stesso snapshot iniziale:
+
+- possono essere pending_review;
+- dopo l’approvazione della prima, la seconda deve rilevare target drift;
+- la seconda non deve poter sovrascrivere automaticamente il target.
+
+11. CLEANUP
+
+- approval riuscita: elimina staging e backup;
+- reject riuscito: elimina staging;
+- integrity failure: conserva staging per diagnosi o quarantena;
+- DB failure con rollback riuscito: conserva prove diagnostiche secondo policy;
+- recovery_required: non eliminare nulla automaticamente.
+
+12. SICUREZZA
+
+Mantieni invariati:
+
+- sandbox;
+- sanitizzazione dei secret;
+- redazione output;
+- assenza di shell=True;
+- limiti di budget;
+- limiti di tentativi;
+- fail-closed;
+- gate umano.
+
+Non dichiarare isolamento di rete se non è realmente implementato.
+
+TEST OBBLIGATORI
+
+Aggiungi test almeno per:
+
+1. staging invariato approvabile;
+2. contenuto staging modificato dopo candidate → blocco;
+3. file extra aggiunto nello staging → blocco;
+4. file rimosso dallo staging → blocco;
+5. hash o dimensione divergente → blocco;
+6. target immutato se l’integrità fallisce;
+7. staging read-only quando supportato;
+8. errore durante promozione → rollback filesystem;
+9. errore DB dopo promozione → rollback filesystem e DB;
+10. errore audit dopo promozione → rollback completo;
+11. errore durante il rollback → recovery_required;
+12. approve idempotente;
+13. reject idempotente;
+14. candidate rejected non approvabile;
+15. PLAN associata alla candidate tramite run_id;
+16. PLAN e BUILD contabilizzate una sola volta;
+17. token e costo totali dell’intero run corretti;
+18. due candidate concorrenti: la seconda rileva conflitto;
+19. cleanup dopo approval;
+20. cleanup dopo rejection;
+21. staging conservato dopo integrity failure;
+22. end-to-end mockato:
+    candidate pending_review
+    → verifica target
+    → verifica staging
+    → promozione
+    → aggiornamento DB
+    → approved;
+23. end-to-end con fallimento DB e ripristino del target;
+24. regressione completa della suite esistente.
+
+VERIFICA FINALE
+
+Dopo l’implementazione:
+
+1. Esegui tutta la suite di test.
+2. Non effettuare chiamate reali.
+3. Non eseguire MF-RUN-003.
+4. Riporta:
+   - numero totale test;
+   - test passati e falliti;
+   - file modificati;
+   - migrazioni database;
+   - algoritmo di verifica del manifest;
+   - strategia di backup e rollback;
+   - comportamento recovery_required;
+   - comportamento idempotente di approve/reject;
+   - associazione PLAN + BUILD alla candidate;
+   - esempio dei totali token/costo;
+   - stato attuale di target_project;
+   - stato delle candidate precedenti;
+   - conferma che nessuna candidate reale è stata approvata;
+   - hash del nuovo commit previsto dopo il push.
+
+Non apportare modifiche non correlate.
+Non nascondere eventuali limiti o test non superati.

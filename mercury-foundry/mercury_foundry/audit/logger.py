@@ -23,8 +23,14 @@ def log_action(
     action: str,
     actor: str,
     payload: dict | None = None,
+    commit: bool = True,
 ) -> int:
-    """Scrive una riga di audit log e ritorna il suo id. Mai aggiornata né cancellata (append-only)."""
+    """Scrive una riga di audit log e ritorna il suo id. Mai aggiornata né cancellata (append-only).
+
+    `commit=False` (MF-FIX-005) fa partecipare questa scrittura a una
+    transazione DB coordinata dal chiamante (es. Approval Gate: status +
+    decision + audit in un'unica transazione) — il chiamante è responsabile
+    di chiamare `conn.commit()`/`conn.rollback()` lui stesso."""
     cur = conn.execute(
         """
         INSERT INTO audit_log (entity_type, entity_id, action, actor, payload_json, created_at)
@@ -32,7 +38,8 @@ def log_action(
         """,
         (entity_type, entity_id, action, actor, json.dumps(payload or {}, ensure_ascii=False), _now()),
     )
-    conn.commit()
+    if commit:
+        conn.commit()
     return cur.lastrowid
 
 

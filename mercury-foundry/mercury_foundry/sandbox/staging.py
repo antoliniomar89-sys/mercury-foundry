@@ -30,17 +30,30 @@ def _iter_files(root: Path) -> list[Path]:
     return sorted(p for p in root.rglob("*") if p.is_file() and not _is_engine_internal(p))
 
 
+def compute_manifest(root: Path) -> dict[str, dict]:
+    """Mappa relative_path (posix) -> {"hash": sha256, "size": byte}.
+
+    Inventario COMPLETO di ogni file presente sotto `root` (mai solo un
+    diff): è la base per verificare, byte per byte, che uno staging non sia
+    stato alterato tra la creazione della candidate e la sua approvazione
+    (MF-FIX-005, gap 1) — senza alcuna logica specifica di un probe: confronta
+    hash/dimensione di OGNI file, quindi copre automaticamente anche i
+    contenuti soggetti a literal_constraints senza doverli conoscere qui."""
+    manifest: dict[str, dict] = {}
+    for path in _iter_files(root):
+        rel = path.relative_to(root).as_posix()
+        content = path.read_bytes()
+        manifest[rel] = {"hash": hashlib.sha256(content).hexdigest(), "size": len(content)}
+    return manifest
+
+
 def compute_tree_snapshot(root: Path) -> dict[str, str]:
     """Mappa relative_path (posix) -> sha256 esadecimale del contenuto.
 
     Base sia per il rilevamento di conflitti (il target è cambiato rispetto
     a quando lo staging è stato creato) sia per il manifest diff (cosa è
     stato creato/modificato/eliminato in staging rispetto al target originale)."""
-    snapshot: dict[str, str] = {}
-    for path in _iter_files(root):
-        rel = path.relative_to(root).as_posix()
-        snapshot[rel] = hashlib.sha256(path.read_bytes()).hexdigest()
-    return snapshot
+    return {rel: info["hash"] for rel, info in compute_manifest(root).items()}
 
 
 def compute_snapshot_hash(snapshot: dict[str, str]) -> str:
@@ -89,6 +102,123 @@ def diff_snapshots(before: dict[str, str], after: dict[str, str], after_root: Pa
 
 
 @dataclass
+class IntegrityResult:
+    passed: bool
+    reasons: list[str] = field(default_factory=list)
+    extra_files: list[str] = field(default_factory=list)
+    missing_files: list[str] = field(default_factory=list)
+    changed_files: list[str] = field(default_factory=list)
+
+
+def verify_staging_integrity(staging_root: Path, expected_manifest: dict[str, dict] | None) -> IntegrityResult:
+    """Ricalcola l'inventario COMPLETO dello staging adesso e lo confronta,
+    file per file, con il manifest registrato al momento della creazione
+    della candidate (`expected_manifest`, da `compute_manifest`).
+
+    Rileva ESATTAMENTE (MF-FIX-005, requisito 1): file creati/aggiunti extra,
+    file rimossi, e file il cui hash o dimensione sono cambiati — inclusi
+    quelli soggetti a literal_constraints, senza bisogno di conoscerli qui:
+    qualunque bit alterato produce un hash diverso. Nessuna eccezione
+    sollevata qui: il chiamante decide come reagire (fail-closed)."""
+    expected = expected_manifest or {}
+    current = compute_manifest(staging_root)
+
+    extra = sorted(set(current) - set(expected))
+    missing = sorted(set(expected) - set(current))
+    changed = sorted(
+        rel
+        for rel in (set(current) & set(expected))
+        if current[rel]["hash"] != expected[rel]["hash"] or current[rel]["size"] != expected[rel]["size"]
+    )
+
+    reasons: list[str] = []
+    if extra:
+        reasons.append(f"file extra rilevati nello staging (non presenti al momento della candidate): {extra}")
+    if missing:
+        reasons.append(f"file mancanti nello staging (presenti al momento della candidate): {missing}")
+    if changed:
+        reasons.append(f"file modificati nello staging dopo la creazione della candidate: {changed}")
+
+    return IntegrityResult(passed=not reasons, reasons=reasons, extra_files=extra, missing_files=missing, changed_files=changed)
+
+
+def make_read_only(root: Path) -> list[str]:
+    """Rende `root` e il suo contenuto read-only, quando il filesystem lo
+    consente (difesa in profondità, MAI l'unico controllo: il vero gate di
+    sicurezza resta `verify_staging_integrity`, eseguito comunque a ogni
+    approvazione indipendentemente dall'esito di questa funzione).
+
+    Ritorna la lista dei path per cui il chmod è fallito (es. filesystem che
+    non supporta i permessi POSIX): un fallimento qui NON blocca la
+    creazione della candidate, ma va registrato in audit per trasparenza."""
+    failures: list[str] = []
+    if not root.exists():
+        return failures
+    for path in root.rglob("*"):
+        try:
+            path.chmod(0o444 if path.is_file() else 0o555)
+        except OSError:
+            failures.append(str(path))
+    try:
+        root.chmod(0o555)
+    except OSError:
+        failures.append(str(root))
+    return failures
+
+
+def make_writable(root: Path) -> None:
+    """Ripristina i permessi di scrittura su `root` e il suo contenuto,
+    best-effort (ignora errori): necessario prima di eliminare o promuovere
+    uno staging reso read-only da `make_read_only`, altrimenti `rmtree`
+    fallirebbe con PermissionError sulle directory."""
+    if not root.exists():
+        return
+    try:
+        root.chmod(0o755)
+    except OSError:
+        pass
+    for path in root.rglob("*"):
+        try:
+            path.chmod(0o755 if path.is_dir() else 0o644)
+        except OSError:
+            pass
+
+
+def create_backup(target_root: Path, backup_root: Path) -> Path:
+    """Copia fisicamente `target_root` (stato PRIMA della promozione) in
+    `backup_root`, per poter ripristinare il target per intero se un passo
+    successivo alla scrittura del filesystem (DB, audit) fallisse."""
+    target_root = target_root.resolve()
+    if backup_root.exists():
+        shutil.rmtree(backup_root)
+    backup_root.parent.mkdir(parents=True, exist_ok=True)
+    if target_root.exists():
+        shutil.copytree(target_root, backup_root)
+    else:
+        backup_root.mkdir(parents=True, exist_ok=True)
+    return backup_root
+
+
+def restore_backup(backup_root: Path, target_root: Path) -> None:
+    """Ripristina `target_root` esattamente allo stato catturato in
+    `backup_root`: rimuove qualunque cosa la promozione avesse scritto e
+    riporta l'intero albero al suo stato pre-promozione."""
+    target_root = target_root.resolve()
+    if target_root.exists():
+        shutil.rmtree(target_root)
+    if backup_root.exists():
+        shutil.copytree(backup_root, target_root)
+    else:
+        target_root.mkdir(parents=True, exist_ok=True)
+
+
+def discard_backup(backup_root: Path) -> None:
+    """Elimina un backup non più necessario (dopo un'approvazione riuscita).
+    Idempotente: nessun errore se la cartella non esiste già."""
+    shutil.rmtree(backup_root, ignore_errors=True)
+
+
+@dataclass
 class Staging:
     run_id: str
     attempt_id: int
@@ -130,7 +260,12 @@ def create_staging(base_dir: Path, run_id: str, attempt_id: int, target_root: Pa
 
 def discard_staging(staging_root: Path) -> None:
     """Elimina uno staging (failure, rejection, o dopo una promozione
-    riuscita). Idempotente: nessun errore se la cartella non esiste già."""
+    riuscita). Idempotente: nessun errore se la cartella non esiste già.
+
+    Ripristina prima i permessi di scrittura (`make_writable`): uno staging
+    reso read-only da `make_read_only` dopo la creazione di una candidate
+    bloccherebbe altrimenti `rmtree` con PermissionError sulle directory."""
+    make_writable(staging_root)
     shutil.rmtree(staging_root, ignore_errors=True)
 
 

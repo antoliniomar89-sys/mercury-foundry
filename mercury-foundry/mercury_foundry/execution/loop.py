@@ -22,7 +22,14 @@ from mercury_foundry.ai.errors import ProviderExecutionError
 from mercury_foundry.audit.logger import log_action
 from mercury_foundry.policy.errors import BuildIncompleteError, LiteralConstraintViolationError
 from mercury_foundry.policy.literal_constraints import LiteralConstraints, verify_literal_constraints
-from mercury_foundry.sandbox.staging import compute_tree_snapshot, create_staging, diff_snapshots, discard_staging
+from mercury_foundry.sandbox.staging import (
+    compute_manifest,
+    compute_tree_snapshot,
+    create_staging,
+    diff_snapshots,
+    discard_staging,
+    make_read_only,
+)
 from mercury_foundry.sandbox.test_env import sanitize_test_output
 from mercury_foundry.sandbox.workspace import Workspace
 from mercury_foundry.state import models
@@ -424,14 +431,19 @@ class ExecutionLoop:
                 # useranno.
                 final_snapshot = compute_tree_snapshot(staging.root)
                 diff = diff_snapshots(staging.initial_snapshot, final_snapshot, staging.root)
-                provider_calls_for_task = models.list_provider_calls_for_task(self.conn, task_id)
+                # Rendicontazione a livello di RUN (non solo di task): include la
+                # chiamata PLAN (task_id NULL) e ogni tentativo, anche quelli
+                # falliti (FIX), coerentemente con `associate_candidate_provider_calls`
+                # sotto — MF-FIX-005, gap 3. Il totale token/costo del manifest deve
+                # coincidere con l'insieme di chiamate poi collegato alla candidate.
+                provider_calls_for_run = models.list_provider_calls_for_run(self.conn, run_id)
                 total_tokens = sum(
                     (json.loads(c["usage_json"]) or {}).get("total_tokens", 0)
-                    for c in provider_calls_for_task
+                    for c in provider_calls_for_run
                     if c["usage_json"]
                 )
                 total_cost = sum(
-                    c["estimated_cost_usd"] for c in provider_calls_for_task if c["estimated_cost_usd"] is not None
+                    c["estimated_cost_usd"] for c in provider_calls_for_run if c["estimated_cost_usd"] is not None
                 )
                 last_record = self.builder.ai_provider.last_call_record
                 manifest = {
@@ -446,6 +458,12 @@ class ExecutionLoop:
                     "staging_reference": str(staging.root),
                     "target_root": str(staging.target_root),
                     "files": diff.to_dict(),
+                    # Inventario COMPLETO dello staging al momento della creazione
+                    # della candidate (non solo il diff): riferimento immutabile usato
+                    # da `verify_staging_integrity` all'approvazione, per rilevare
+                    # QUALUNQUE alterazione dello staging avvenuta dopo questo punto
+                    # (MF-FIX-005, gap 1).
+                    "staging_manifest": compute_manifest(staging.root),
                     "test_result": {
                         "passed": eval_result.passed,
                         "duration_ms": eval_result.duration_ms,
@@ -456,7 +474,7 @@ class ExecutionLoop:
                     "literal_constraints_applied": literal_constraints.to_dict()
                     if literal_constraints is not None
                     else None,
-                    "provider_call_ids": [c["id"] for c in provider_calls_for_task],
+                    "provider_call_ids": [c["id"] for c in provider_calls_for_run],
                     "tokens_total": total_tokens,
                     "estimated_cost_usd_total": total_cost,
                     "created_at": datetime.now(timezone.utc).isoformat(),
@@ -496,7 +514,28 @@ class ExecutionLoop:
                         "target_untouched": True,
                     },
                 )
-                models.associate_candidate_provider_calls(self.conn, task_id, candidate_id)
+                models.associate_candidate_provider_calls(self.conn, run_id, candidate_id)
+
+                # Difesa in profondità (MF-FIX-005, gap 1): rende lo staging
+                # read-only ORA che la candidate esiste, dove il filesystem lo
+                # consente. Il vero controllo di sicurezza resta
+                # `verify_staging_integrity` in fase di approvazione (eseguito
+                # SEMPRE, indipendentemente dall'esito di questo chmod) — un
+                # filesystem che non supporta i permessi POSIX non riduce la
+                # protezione, solo la difesa aggiuntiva.
+                read_only_failures = make_read_only(staging.root)
+                if read_only_failures:
+                    log_action(
+                        self.conn,
+                        entity_type="candidate",
+                        entity_id=candidate_id,
+                        action="STAGING_READ_ONLY_INCOMPLETE",
+                        actor="system",
+                        payload={
+                            "staging_root": str(staging.root),
+                            "failed_paths_count": len(read_only_failures),
+                        },
+                    )
                 return TaskOutcome(
                     task_id=task_id,
                     status="candidate_created",

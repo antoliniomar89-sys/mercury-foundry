@@ -70,7 +70,10 @@ def test_end_to_end_health_check(tmp_path):
         assert expected in actions, f"azione mancante nell'audit log: {expected}"
 
     # Approvazione umana esplicita (Approval Gate).
-    gate.approve_candidate(foundry.conn, outcome.candidate_id, rationale="Test end-to-end superato")
+    gate.approve_candidate(
+        foundry.conn, outcome.candidate_id, rationale="Test end-to-end superato",
+        backup_base_dir=foundry.backup_base_dir,
+    )
     candidate_after = models.get_candidate(foundry.conn, outcome.candidate_id)
     assert candidate_after["status"] == "approved"
 

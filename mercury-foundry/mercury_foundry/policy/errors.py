@@ -39,3 +39,27 @@ class TargetConflictError(RuntimeError):
     Blocco fail-closed: nessuna scrittura sul target, la candidate resta
     `pending_review` (o viene marcata `conflict`), serve una nuova candidate
     o una decisione umana esplicita su come procedere."""
+
+
+class CandidateIntegrityError(RuntimeError):
+    """Lo staging della candidate NON è più, byte per byte, nello stato
+    registrato quando la candidate è stata creata (MF-FIX-005, gap 1): file
+    extra, file mancanti, o contenuto/dimensione cambiati rispetto al
+    manifest salvato al momento della creazione.
+
+    Blocco fail-closed PRIMA di qualunque scrittura sul target: nessuna
+    promozione avviene, la candidate resta `pending_review`, lo staging
+    NON viene eliminato (resta disponibile per la diagnosi), e l'evento è
+    registrato per intero in audit log."""
+
+
+class CandidateRecoveryRequiredError(RuntimeError):
+    """Un tentativo di approvazione ha promosso lo staging sul target reale,
+    ma un passo successivo (scrittura DB/audit) è fallito E anche il
+    ripristino automatico del target dal backup è fallito.
+
+    Il sistema non dichiara un successo silenzioso né un semplice fallimento
+    riprovabile: la candidate viene marcata `recovery_required`, backup e
+    staging vengono PRESERVATI (nessuna pulizia automatica) per permettere
+    una diagnosi/ripristino manuale. Nessun retry automatico: richiede
+    intervento umano esplicito."""

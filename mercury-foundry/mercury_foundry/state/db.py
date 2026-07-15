@@ -82,6 +82,12 @@ def _migrate_candidates_columns(conn: sqlite3.Connection) -> None:
         "staging_root": "TEXT",
         "target_snapshot_hash": "TEXT",
         "manifest_json": "TEXT",
+        # MF-FIX-005: percorso del backup restorabile del target, creato
+        # dall'Approval Gate PRIMA di promuovere una candidate. Persistito
+        # (non solo tenuto in memoria) perché deve restare ispezionabile
+        # anche dopo un riavvio del processo, se l'approvazione finisce in
+        # stato `recovery_required`.
+        "backup_root": "TEXT",
     }
     for name, sql_type in new_columns.items():
         if name not in existing_columns:

@@ -123,7 +123,7 @@ def test_two_mandatory_files_split_across_plan_steps_both_end_up_written(tmp_pat
     # Il target reale non è ancora stato toccato: nessuna approvazione umana ancora.
     assert not (workspace.root / "capability.py").exists()
 
-    gate.approve_candidate(conn, candidate_id)
+    gate.approve_candidate(conn, candidate_id, backup_base_dir=tmp_path / "mf_backups")
     assert (workspace.root / "capability.py").exists()
     assert (workspace.root / "tests" / "test_capability.py").exists()
 

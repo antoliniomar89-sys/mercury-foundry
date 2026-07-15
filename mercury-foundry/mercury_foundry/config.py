@@ -22,6 +22,14 @@ DEFAULT_DB_PATH = DATA_DIR / "mercury_foundry.db"
 # target reale (vedi `sandbox.staging.promote_staging`).
 STAGING_BASE_DIR = DATA_DIR / "staging"
 
+# Radice sotto cui l'Approval Gate scrive un backup RESTORABILE del target
+# reale, PRIMA di promuovere una candidate (MF-FIX-005): se un passo dopo la
+# scrittura sul filesystem fallisse (es. DB/audit), il target viene
+# ripristinato esattamente da qui. Cancellato solo dopo un'approvazione
+# riuscita fino in fondo (DB incluso), o preservato se il ripristino stesso
+# fallisse (stato `recovery_required`).
+BACKUP_BASE_DIR = DATA_DIR / "backups"
+
 SCHEMA_PATH = BASE_DIR / "mercury_foundry" / "state" / "schema.sql"
 
 # Vincolo esplicito richiesto: default 3 tentativi automatici per task.
