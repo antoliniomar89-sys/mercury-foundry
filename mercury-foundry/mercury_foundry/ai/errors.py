@@ -50,3 +50,13 @@ class ProviderRefusalError(ProviderExecutionError):
 
 class ProviderIncompleteResponseError(ProviderExecutionError):
     """Il provider ha restituito una risposta incompleta (troncata o filtrata)."""
+
+
+class ProviderUnsafePatchError(ProviderExecutionError):
+    """La patch strutturata proposta dal provider viola un vincolo di sicurezza:
+
+    path traversal / path assoluto, operazione di cancellazione (non supportata
+    dalla sandbox, quindi rifiutata invece di essere ignorata in silenzio),
+    contenuto mancante per create/update, o numero di file superiore al massimo
+    consentito per l'operazione corrente.
+    """

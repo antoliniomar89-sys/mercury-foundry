@@ -1,0 +1,95 @@
+Do not perform any real provider calls in this task.
+
+The first controlled real Foundry run exposed a confirmed architecture gap:
+
+- check-provider already uses strict Structured Outputs successfully;
+- propose_plan / decompose_goal and propose_patch still rely on prompt-only JSON instructions and free-text parsing;
+- the real run therefore failed closed during planning;
+- no target_project files were modified.
+
+Fix this properly without redesigning Mercury Foundry.
+
+GOAL
+
+Apply strict OpenAI Structured Outputs to every real-provider operation that expects machine-readable data, especially:
+
+1. goal decomposition;
+2. plan proposal;
+3. patch proposal;
+4. verification/evaluation output, wherever structured data is expected.
+
+REQUIREMENTS
+
+1. Define explicit typed schemas for each provider operation.
+
+2. Planning schema must represent at least:
+   - objective;
+   - ordered steps;
+   - expected files;
+   - verification criteria;
+   - risk notes.
+
+3. Patch schema must represent at least:
+   - file path;
+   - operation: create, update, or delete;
+   - complete proposed content or a safely applicable structured change;
+   - rationale;
+   - verification relevance.
+
+4. Evaluation schema must represent at least:
+   - passed;
+   - failures;
+   - evidence;
+   - retry recommendation.
+
+5. Use the official OpenAI SDK Structured Outputs mechanism with strict schema enforcement.
+
+6. Keep all OpenAI-specific response handling inside the provider adapter.
+
+7. Preserve fail-closed behavior for:
+   - refusal;
+   - incomplete response;
+   - schema mismatch;
+   - unsupported model;
+   - missing structured content;
+   - unsafe file operation;
+   - budget or attempt limit breach.
+
+8. Do not fall back to free-text parsing.
+9. Do not guess malformed JSON.
+10. Do not weaken sandbox restrictions.
+11. Do not modify target_project during this task.
+12. Do not make any real API call.
+
+TESTS
+
+Add mocked tests covering at least:
+
+- valid structured plan;
+- refusal during planning;
+- incomplete structured plan;
+- valid structured patch;
+- malformed or unsafe patch rejection;
+- path traversal rejection;
+- multiple-file patch rejection when the specification permits only one file;
+- valid structured evaluation;
+- provider metadata and usage persistence;
+- regression of check-provider Structured Outputs;
+- complete existing test suite.
+
+Also add one mocked end-to-end real-provider workflow proving:
+
+SPEC → PLAN → BUILD → TEST → VERIFY → CANDIDATE
+
+using structured mocked provider responses, while preserving the mandatory human approval gate.
+
+AFTER IMPLEMENTATION
+
+1. Run the complete test suite.
+2. Report the exact test count and results.
+3. List every changed file.
+4. Explain the schemas added.
+5. Demonstrate the mocked end-to-end candidate metadata.
+6. Provide the exact command for repeating the previously failed controlled real run.
+7. Do not execute that command.
+8. Do not make unrelated changes.

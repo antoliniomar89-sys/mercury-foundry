@@ -2,3 +2,4 @@
 - [setupReplitAIIntegrations declined](ai-integration-declined-flow.md) — if the user declines the account upgrade prompt, don't retry; ask the user (AskQuestion) whether to provide their own key or proceed with a stubbed/fake fallback.
 - [Fail-closed real-AI-provider pattern](fail-closed-ai-provider-pattern.md) — how to add a real paid AI provider to a system that must never call it silently or leak secrets.
 - [OpenAI structured-output check-provider fix](openai-structured-output-check-provider.md) — Responses API + Structured Outputs replaces prompt-only JSON for check-provider; test via httpx.MockTransport, not by mocking .parse().
+- [Mercury Foundry Structured Outputs rollout](mercury-foundry-structured-outputs.md) — propose_plan/propose_patch/evaluation now share check-provider's strict-schema mechanism; known persistence gap on successful plan calls.

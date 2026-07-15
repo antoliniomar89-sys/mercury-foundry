@@ -4,32 +4,31 @@ Nessuna credenziale, modello, endpoint o costo è hardcoded qui: tutto arriva
 da `RealProviderConfig` (a sua volta caricata SOLO da env var / Replit
 Secrets — vedi `provider_config.py`).
 
-Due meccaniche di chiamata coesistono in questo adapter, entrambe isolate
-qui dentro (nessun altro componente di Mercury Foundry sa quale delle due
-sia in uso):
+Un'UNICA meccanica di chiamata è usata per TUTTE le operazioni che si
+aspettano dati machine-readable (`propose_plan`, `propose_patch`,
+`propose_evaluation`, `check_connectivity`): Responses API dell'SDK
+ufficiale `openai`, con Structured Outputs a schema JSON stretto
+(`strict=True`, applicato automaticamente dall'SDK sui modelli Pydantic in
+`schemas.py`). Il parsing avviene SEMPRE tramite l'SDK
+(`response.output_parsed`), MAI estraendo JSON da testo libero: non esiste
+più, in questo modulo, alcun meccanismo di chat-completions "grezze" con
+parsing manuale — è stato rimosso perché è esattamente ciò che aveva causato
+il fallimento fail-closed della prima run reale controllata (risposta di
+piano non JSON).
 
-- `propose_plan`/`propose_patch` (usate dal ciclo Foundry completo):
-  chat completions "grezze" via `http_post` iniettabile, parsing manuale
-  del JSON nel testo libero della risposta. Non toccate da questa modifica.
-- `check_connectivity` (usata SOLO dal comando CLI `check-provider`):
-  Responses API dell'SDK ufficiale `openai`, con Structured Outputs a
-  schema JSON stretto (`strict=True`). Il parsing avviene tramite l'SDK
-  (`response.output_parsed`), MAI estraendo JSON da testo libero.
-
-Testabilità: sia `http_post` sia il client `openai` sono iniettabili. I test
-devono SEMPRE iniettare un mock (per `check_connectivity`, un client con un
-trasporto HTTP fittizio — vedi `tests/test_real_provider.py`): questo modulo
-non viene mai esercitato con una chiamata di rete reale dalla suite
-automatica.
+Testabilità: il client `openai` è SEMPRE iniettabile. I test devono SEMPRE
+iniettare un client con un trasporto HTTP fittizio (`httpx.MockTransport` —
+vedi `tests/test_real_provider.py` e `tests/test_check_provider_structured_output.py`):
+questo modulo non viene mai esercitato con una chiamata di rete reale dalla
+suite automatica.
 """
 
 from __future__ import annotations
 
 import json
-import urllib.error
-import urllib.request
 from datetime import datetime, timezone
-from typing import Any, Callable, Literal
+from pathlib import PurePosixPath
+from typing import Any, TypeVar
 
 import openai
 from openai import OpenAI
@@ -43,45 +42,35 @@ from mercury_foundry.ai.errors import (
     ProviderRefusalError,
     ProviderTimeoutError,
     ProviderUnknownModelError,
+    ProviderUnsafePatchError,
     ProviderUsageBudgetExceededError,
 )
 from mercury_foundry.ai.provider import AIProvider, FileChange, PatchProposal, ProviderCallRecord
 from mercury_foundry.ai.provider_config import RealProviderConfig, redact
-
-HttpPostFn = Callable[[str, dict[str, str], dict[str, Any], float], dict[str, Any]]
-
-
-class ConnectivityCheckResult(BaseModel):
-    """Schema minimo richiesto dal comando CLI `check-provider`.
-
-    Volutamente il più piccolo possibile: serve solo a dimostrare che il
-    provider reale rispetta Structured Outputs con schema stretto, non a
-    trasportare informazioni applicative.
-    """
-
-    status: Literal["ok"]
-    message: str
-
+from mercury_foundry.ai.schemas import (
+    ConnectivityCheckResult,
+    EvaluationSchema,
+    PatchFileOperation,
+    PatchSchema,
+    PlanSchema,
+)
 
 CHECK_PROVIDER_SCHEMA_NAME = "connectivity_check_result"
 
-
-def _default_http_post(url: str, headers: dict[str, str], body: dict[str, Any], timeout: float) -> dict[str, Any]:
-    """Implementazione reale via stdlib. Usata SOLO fuori dai test (mai mockata)."""
-    data = json.dumps(body).encode("utf-8")
-    request = urllib.request.Request(url, data=data, headers=headers, method="POST")
-    try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            raw = response.read().decode("utf-8")
-    except urllib.error.URLError as exc:
-        # Copre sia i timeout socket sia altri errori di rete: qui li normalizziamo
-        # a TimeoutError, che il chiamante traduce in ProviderTimeoutError.
-        raise TimeoutError(str(exc)) from exc
-    return json.loads(raw)
+SchemaT = TypeVar("SchemaT", bound=BaseModel)
 
 
 class OpenAICompatibleProvider(AIProvider):
-    """Provider reale, is_simulated=False. Implementa SOLO propose_plan/propose_patch.
+    """Provider reale, is_simulated=False.
+
+    Implementa l'interfaccia `AIProvider` (`propose_plan`/`propose_patch`) più due
+    operazioni supplementari specifiche di questo adapter, non parte
+    dell'interfaccia sostituibile perché non usate dal ciclo deterministico
+    dell'Execution Loop:
+    - `check_connectivity`: SOLO dal comando CLI `check-provider`;
+    - `propose_evaluation`: valutazione strutturata SUPPLEMENTARE di un esito di
+      test, MAI usata per decidere pass/fail (quella decisione resta sempre
+      deterministica, a partire dall'esecuzione reale di pytest).
 
     Ogni chiamata:
     - viene bloccata PRIMA di partire se supererebbe max_calls_per_run;
@@ -97,15 +86,13 @@ class OpenAICompatibleProvider(AIProvider):
         self,
         config: RealProviderConfig,
         *,
-        http_post: HttpPostFn | None = None,
         client: OpenAI | None = None,
     ):
         self.config = config
         self.name = f"openai-compatible:{config.model}"
-        self._http_post = http_post or _default_http_post
-        # Client SDK ufficiale, usato SOLO da `check_connectivity`. Costruirlo
-        # non esegue alcuna chiamata di rete: nessun costo/effetto finché un
-        # metodo non lo invoca esplicitamente.
+        # Client SDK ufficiale, unico canale di chiamata di questo adapter.
+        # Costruirlo non esegue alcuna chiamata di rete: nessun costo/effetto
+        # finché un metodo non lo invoca esplicitamente.
         self._client = client or OpenAI(
             api_key=config.api_key, base_url=config.base_url, timeout=config.timeout_seconds
         )
@@ -113,65 +100,145 @@ class OpenAICompatibleProvider(AIProvider):
         self._tokens_used = 0
         self._cost_used_usd = 0.0
 
+    # -- operazioni dell'interfaccia AIProvider -----------------------------
+
     def propose_plan(self, goal_description: str) -> list[str]:
-        response_text = self._invoke(
-            system_prompt=(
-                "Sei il modulo di pianificazione di Mercury Foundry. Rispondi SOLO con un "
-                "elenco JSON di stringhe, ciascuna una descrizione di task ordinato."
-            ),
-            user_prompt=goal_description,
+        """Piano strutturato (Structured Outputs, `PlanSchema`) per l'obiettivo.
+
+        Ritorna SOLO la lista ordinata di step (contratto richiesto da
+        `decompose_goal`/`AIProvider`): le altre informazioni dello schema
+        (expected_files, verification_criteria, risk_notes) sono comunque
+        richieste e validate strettamente dal modello, ma non transitano oggi
+        verso l'Execution Loop per non redesignare le sue transizioni di stato.
+        """
+        parsed = self._structured_call(
+            input_messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "Sei il modulo di pianificazione di Mercury Foundry. Rispondi SOLO con "
+                        "un piano strutturato per l'obiettivo indicato: un obiettivo riformulato, "
+                        "un elenco ordinato di step, i file che ti aspetti di creare o modificare, "
+                        "i criteri con cui verificare il completamento, e note di rischio."
+                    ),
+                },
+                {"role": "user", "content": goal_description},
+            ],
+            text_format=PlanSchema,
         )
-        try:
-            plan = json.loads(response_text)
-        except json.JSONDecodeError as exc:
-            raise ProviderMalformedResponseError(
-                f"Risposta del piano non è JSON valido: {exc}"
-            ) from exc
-        if not isinstance(plan, list) or not all(isinstance(item, str) for item in plan):
-            raise ProviderMalformedResponseError(
-                "Risposta del piano non è una lista JSON di stringhe."
+        if not parsed.steps:
+            raise ProviderIncompleteResponseError(
+                "Il piano strutturato del provider non contiene alcuno step."
             )
-        return plan
+        return list(parsed.steps)
 
     def propose_patch(self, task_description: str, context: dict) -> PatchProposal:
-        response_text = self._invoke(
-            system_prompt=(
-                "Sei il modulo Builder di Mercury Foundry. Rispondi SOLO con un JSON con "
-                'chiavi "summary" (str), "files" (lista di {"path","content"}), '
-                '"test_files" (lista di {"path","content"}).'
-            ),
-            user_prompt=json.dumps({"task_description": task_description, "context": context}),
+        """Patch strutturata (Structured Outputs, `PatchSchema`) per il task.
+
+        `context` può opzionalmente contenere `max_files` (int): se presente,
+        il numero totale di operazioni sui file (principali + di test) che
+        superi questo limite viene rifiutato fail-closed
+        (`ProviderUnsafePatchError`), invece di essere applicato parzialmente.
+        """
+        parsed = self._structured_call(
+            input_messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "Sei il modulo Builder di Mercury Foundry. Rispondi SOLO con una patch "
+                        'strutturata: un riepilogo, e un elenco di operazioni sui file "files" e '
+                        '"test_files", ciascuna con path relativo alla sandbox, operation '
+                        '(create/update/delete), il contenuto COMPLETO del file (null solo per '
+                        "delete), una motivazione e la rilevanza per la verifica."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": json.dumps({"task_description": task_description, "context": context}),
+                },
+            ],
+            text_format=PatchSchema,
         )
-        try:
-            payload = json.loads(response_text)
-            summary = payload["summary"]
-            files = [FileChange(path=f["path"], content=f["content"]) for f in payload.get("files", [])]
-            test_files = [
-                FileChange(path=f["path"], content=f["content"]) for f in payload.get("test_files", [])
-            ]
-        except (json.JSONDecodeError, KeyError, TypeError) as exc:
-            raise ProviderMalformedResponseError(
-                f"Risposta della patch non è nel formato atteso: {exc}"
-            ) from exc
+
+        max_files = context.get("max_files") if isinstance(context, dict) else None
+        files = _validate_and_convert_operations(parsed.files, max_files=None)
+        test_files = _validate_and_convert_operations(parsed.test_files, max_files=None)
+        _enforce_max_files(len(files) + len(test_files), max_files=max_files)
 
         return PatchProposal(
-            summary=summary,
+            summary=parsed.summary,
             files=files,
             test_files=test_files,
             provider_name=self.name,
             is_simulated=False,
         )
 
+    # -- operazioni supplementari specifiche di questo adapter --------------
+
     def check_connectivity(self, prompt: str) -> dict[str, str]:
         """UNA chiamata reale via Responses API + Structured Outputs stretti.
 
-        Isolata da `propose_plan`/`propose_patch`: usata solo dal comando CLI
-        `check-provider`. Ritorna `{"status": "ok", "message": ...}` SOLO se
-        il modello ha prodotto un output conforme allo schema stretto
-        (`ConnectivityCheckResult`), analizzato dall'SDK ufficiale — nessuna
-        estrazione di JSON da testo libero. Qualunque rifiuto, risposta
-        incompleta, risposta malformata o modello non supportato per gli
-        structured output blocca fail-closed (nessun retry silenzioso).
+        Isolata dalle altre operazioni solo nel senso che è usata unicamente
+        dal comando CLI `check-provider`: la meccanica di chiamata sottostante
+        (`_structured_call`) è la STESSA usata da `propose_plan`/`propose_patch`.
+        Qualunque rifiuto, risposta incompleta, risposta malformata o modello
+        non supportato per gli structured output blocca fail-closed (nessun
+        retry silenzioso).
+        """
+        parsed = self._structured_call(
+            input_messages=[{"role": "user", "content": prompt}],
+            text_format=ConnectivityCheckResult,
+        )
+        return {"status": parsed.status, "message": parsed.message}
+
+    def propose_evaluation(self, *, task_description: str, test_output: str) -> dict[str, Any]:
+        """Valutazione strutturata SUPPLEMENTARE (Structured Outputs, `EvaluationSchema`).
+
+        NON sostituisce mai il giudizio pass/fail deterministico dell'Evaluator
+        (basato sull'esecuzione reale di pytest): questo metodo produce solo un
+        riepilogo strutturato leggibile (fallimenti, evidenze, raccomandazione
+        di retry) accanto all'esito reale, per audit/reporting futuro. Non è
+        parte dell'interfaccia `AIProvider` e non è invocato dall'Execution
+        Loop.
+        """
+        parsed = self._structured_call(
+            input_messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "Sei il modulo di valutazione di Mercury Foundry. Rispondi SOLO con una "
+                        "valutazione strutturata (passed, failures, evidence, retry_recommendation) "
+                        "del seguente esito REALE di esecuzione dei test. Non stai decidendo se il "
+                        "task è approvato: stai solo riassumendo l'esito già osservato."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": json.dumps(
+                        {"task_description": task_description, "test_output": test_output}
+                    ),
+                },
+            ],
+            text_format=EvaluationSchema,
+        )
+        return {
+            "passed": parsed.passed,
+            "failures": list(parsed.failures),
+            "evidence": list(parsed.evidence),
+            "retry_recommendation": parsed.retry_recommendation,
+        }
+
+    # -- meccanica interna di chiamata, budget e recording -----------------
+
+    def _structured_call(self, *, input_messages: list[dict], text_format: type[SchemaT]) -> SchemaT:
+        """Esegue UNA chiamata Structured Outputs e ritorna l'output tipizzato/parsato.
+
+        Condivisa da `propose_plan`, `propose_patch`, `check_connectivity` e
+        `propose_evaluation`: stessa logica di budget, timeout, rifiuto,
+        risposta incompleta e schema mismatch per qualunque operazione usi
+        questo adapter. Non fa MAI fallback a parsing di testo libero: se
+        `response.output_parsed` è `None`, o il modello rifiuta, o la risposta
+        è incompleta/malformata, blocca fail-closed.
         """
         call_number = self._check_call_budget()
         requested_at = _now()
@@ -179,8 +246,8 @@ class OpenAICompatibleProvider(AIProvider):
         try:
             response = self._client.responses.parse(
                 model=self.config.model,
-                input=[{"role": "user", "content": prompt}],
-                text_format=ConnectivityCheckResult,
+                input=input_messages,
+                text_format=text_format,
                 timeout=self.config.timeout_seconds,
             )
         except openai.APITimeoutError as exc:
@@ -203,9 +270,7 @@ class OpenAICompatibleProvider(AIProvider):
         except openai.APIError as exc:
             message = redact(str(exc), self.config.api_key)
             self._record_call(call_number, requested_at, success=False, error=message)
-            raise ProviderMalformedResponseError(
-                f"Errore di comunicazione con il provider: {message}"
-            ) from exc
+            raise ProviderMalformedResponseError(f"Errore di comunicazione con il provider: {message}") from exc
         except ValidationError as exc:
             # L'SDK ha ricevuto una risposta HTTP valida, ma il testo generato dal
             # modello non è JSON conforme allo schema stretto richiesto: l'SDK
@@ -235,9 +300,7 @@ class OpenAICompatibleProvider(AIProvider):
                 error=f"risposta incompleta (motivo: {reason})",
                 responded_at=responded_at, usage=usage,
             )
-            raise ProviderIncompleteResponseError(
-                f"Risposta incompleta dal provider (motivo: {reason})."
-            )
+            raise ProviderIncompleteResponseError(f"Risposta incompleta dal provider (motivo: {reason}).")
 
         if response.status not in (None, "completed"):
             message = redact(
@@ -267,9 +330,7 @@ class OpenAICompatibleProvider(AIProvider):
             call_number, requested_at, success=True, responded_at=responded_at,
             usage=usage, estimated_cost_usd=call_cost,
         )
-        return {"status": parsed.status, "message": parsed.message}
-
-    # -- meccanica interna di chiamata, budget e recording -----------------
+        return parsed
 
     def _check_call_budget(self) -> int:
         if self._call_count >= self.config.max_calls_per_run:
@@ -282,11 +343,6 @@ class OpenAICompatibleProvider(AIProvider):
     def _apply_usage_budget(
         self, call_number: int, requested_at: str, responded_at: str, usage: dict | None
     ) -> float | None:
-        """Aggiorna i contatori cumulativi e blocca fail-closed se un budget è superato.
-
-        Condivisa da `_invoke` e `check_connectivity`: stessa logica di budget
-        per qualunque meccanica di chiamata usi questo adapter.
-        """
         usage = usage or {}
         total_tokens = int(usage.get("total_tokens") or 0)
         self._tokens_used += total_tokens
@@ -312,66 +368,6 @@ class OpenAICompatibleProvider(AIProvider):
                 f"limite ${self.config.max_cost_usd_per_run:.4f}."
             )
         return call_cost
-
-    def _invoke(self, *, system_prompt: str, user_prompt: str) -> str:
-        call_number = self._check_call_budget()
-        requested_at = _now()
-
-        body = {
-            "model": self.config.model,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-        }
-        headers = {
-            "Authorization": f"Bearer {self.config.api_key}",
-            "Content-Type": "application/json",
-        }
-        url = f"{self.config.base_url.rstrip('/')}/chat/completions"
-
-        try:
-            response = self._http_post(url, headers, body, self.config.timeout_seconds)
-        except TimeoutError as exc:
-            self._record_call(call_number, requested_at, success=False, error=str(exc))
-            raise ProviderTimeoutError(
-                f"Timeout dopo {self.config.timeout_seconds}s in attesa del provider AI."
-            ) from exc
-
-        responded_at = _now()
-
-        error_obj = response.get("error") if isinstance(response, dict) else None
-        if error_obj is not None:
-            error_code = (error_obj or {}).get("code") or (error_obj or {}).get("type")
-            message = redact((error_obj or {}).get("message", "errore provider"), self.config.api_key)
-            if error_code in ("model_not_found", "invalid_model"):
-                self._record_call(call_number, requested_at, success=False, error=message, responded_at=responded_at)
-                raise ProviderUnknownModelError(
-                    f"Modello '{self.config.model}' non riconosciuto dal provider: {message}"
-                )
-            self._record_call(call_number, requested_at, success=False, error=message, responded_at=responded_at)
-            raise ProviderMalformedResponseError(f"Il provider ha risposto con un errore: {message}")
-
-        try:
-            content = response["choices"][0]["message"]["content"]
-            usage = response.get("usage") or {}
-        except (KeyError, IndexError, TypeError) as exc:
-            self._record_call(
-                call_number,
-                requested_at,
-                success=False,
-                error=f"Struttura risposta inattesa: {exc}",
-                responded_at=responded_at,
-            )
-            raise ProviderMalformedResponseError(f"Struttura della risposta del provider inattesa: {exc}") from exc
-
-        call_cost = self._apply_usage_budget(call_number, requested_at, responded_at, usage)
-
-        self._record_call(
-            call_number, requested_at, success=True, responded_at=responded_at,
-            usage=usage, estimated_cost_usd=call_cost,
-        )
-        return content
 
     def _estimate_cost(self, total_tokens: int) -> float | None:
         if self.config.cost_per_1k_tokens_usd is None:
@@ -400,6 +396,65 @@ class OpenAICompatibleProvider(AIProvider):
             usage=usage,
             estimated_cost_usd=estimated_cost_usd,
             error_summary=redact(error, self.config.api_key),
+        )
+
+
+# -- validazione della patch strutturata (fail-closed, mai in silenzio) --------------
+
+
+def _assert_safe_relative_path(path: str) -> None:
+    """Rifiuta path assoluti o con tentativo di traversal PRIMA di toccare la sandbox.
+
+    Controllo indipendente e aggiuntivo rispetto a `Workspace.resolve` (che
+    resta invariato e fa la sua stessa verifica al momento della scrittura su
+    disco): qui blocchiamo l'operazione più a monte, appena il provider la
+    propone, così un path non sicuro non genera nemmeno un `FileChange`.
+    """
+    if not path or not path.strip():
+        raise ProviderUnsafePatchError("Percorso di patch non sicuro: vuoto.")
+    if PurePosixPath(path).is_absolute() or path.startswith("/") or (len(path) > 1 and path[1] == ":"):
+        raise ProviderUnsafePatchError(f"Percorso di patch non sicuro (assoluto): {path!r}")
+    if any(part == ".." for part in PurePosixPath(path).parts):
+        raise ProviderUnsafePatchError(f"Percorso di patch non sicuro (tentativo di path traversal): {path!r}")
+
+
+def _validate_and_convert_operations(
+    operations: list[PatchFileOperation], *, max_files: int | None
+) -> list[FileChange]:
+    """Valida ogni operazione e la converte in `FileChange`, fail-closed su qualunque anomalia.
+
+    - path traversal/assoluto -> `ProviderUnsafePatchError`;
+    - `operation="delete"` -> `ProviderUnsafePatchError` (la sandbox `Workspace`
+      non implementa la cancellazione: ignorarla in silenzio lasciando il file
+      presente sarebbe un comportamento non sicuro, quindi si blocca);
+    - `content` mancante per create/update -> `ProviderUnsafePatchError`.
+    """
+    if max_files is not None:
+        _enforce_max_files(len(operations), max_files=max_files)
+
+    file_changes: list[FileChange] = []
+    for op in operations:
+        _assert_safe_relative_path(op.path)
+        if op.operation == "delete":
+            raise ProviderUnsafePatchError(
+                f"Operazione 'delete' non supportata dalla sandbox per il path {op.path!r}: "
+                "rifiutata invece di essere ignorata in silenzio."
+            )
+        if op.operation not in ("create", "update"):
+            raise ProviderUnsafePatchError(f"Operazione di patch non riconosciuta: {op.operation!r}")
+        if op.content is None:
+            raise ProviderUnsafePatchError(
+                f"Contenuto mancante per l'operazione {op.operation!r} sul path {op.path!r}."
+            )
+        file_changes.append(FileChange(path=op.path, content=op.content))
+    return file_changes
+
+
+def _enforce_max_files(total_files: int, *, max_files: int | None) -> None:
+    if max_files is not None and total_files > max_files:
+        raise ProviderUnsafePatchError(
+            f"La patch propone {total_files} file, ma la specifica corrente ne consente "
+            f"al massimo {max_files}: rifiutata invece di essere applicata parzialmente."
         )
 
 
