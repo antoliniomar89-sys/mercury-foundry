@@ -64,7 +64,9 @@ def cmd_check_provider(args: argparse.Namespace) -> int:
         print(f"[check-provider] chiamata fallita: {type(exc).__name__}: {exc}")
         if record is not None:
             print(
-                f"  call_number={record.call_number} success={record.success} "
+                f"  provider={record.provider_name} model={record.model} "
+                f"call_number={record.call_number} success={record.success} "
+                f"usage={record.usage} estimated_cost_usd={record.estimated_cost_usd} "
                 f"error={record.error_summary}"
             )
         return 1
