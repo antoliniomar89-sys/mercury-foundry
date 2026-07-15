@@ -1,0 +1,268 @@
+CODICE OPERAZIONE: MF-AUDIT-004
+NOME: Audit globale post-hardening e verifica sincronizzazione GitHub
+
+Non effettuare chiamate al provider.
+Non eseguire nuovi run reali.
+Non approvare, rifiutare o modificare candidate reali.
+Non modificare target_project.
+Non configurare secret di approvazione.
+Non fare deploy.
+
+OBIETTIVO
+
+Eseguire un audit completo, read-first, dell’attuale Mercury Foundry dopo:
+
+- provider reale OpenAI;
+- MF-RUN-003;
+- MF-INCIDENT-001;
+- MF-GATE-002;
+- isolamento del gate umano;
+- suite dichiarata 182/182.
+
+L’audit deve distinguere rigorosamente:
+
+1. ciò che è realmente implementato;
+2. ciò che è soltanto documentato;
+3. ciò che è simulato;
+4. ciò che manca per un V1 operativo;
+5. ciò che impedisce ancora di produrre risultati economicamente utilizzabili.
+
+FASE 0 — VERIFICA GIT E REMOTO
+
+Prima di analizzare il codice:
+
+1. Riporta senza modificare nulla:
+
+- repository remoto configurato;
+- URL origin;
+- branch locale attivo;
+- commit HEAD completo;
+- commit origin/main completo;
+- stato ahead/behind;
+- working tree pulito o sporco;
+- elenco degli ultimi 15 commit;
+- directory radice effettivamente versionata;
+- eventuali repository Git annidati;
+- eventuali file esclusi da .gitignore;
+- presenza su Git dell’ultima implementazione di:
+  - human_gate.py;
+  - test_human_approval_protocol.py;
+  - test_gate_isolation.py;
+  - gestione approval_revoked;
+  - incident report;
+  - provider reale;
+  - doctor aggiornato.
+
+2. Verifica esplicitamente perché il repository pubblico può ancora mostrare:
+
+- README “Mercury Foundry V0”;
+- FakeModel come unico provider;
+- vecchio comando approve;
+- cronologia apparentemente limitata.
+
+3. Se HEAD locale e origin/main non coincidono, fermati e riporta il problema.
+Non effettuare automaticamente push, force-push, rebase o merge.
+
+FASE 1 — INVENTARIO ARCHITETTURALE
+
+4. Ispeziona l’intero repository e costruisci una mappa reale di:
+
+- CLI;
+- configurazione;
+- provider registry;
+- FakeModel;
+- provider OpenAI reale;
+- Structured Outputs;
+- Orchestrator;
+- ExecutionLoop;
+- Builder;
+- Evaluator;
+- sandbox/staging;
+- literal constraints;
+- database e migrazioni;
+- modelli di stato;
+- audit log;
+- provider_calls;
+- candidate manifest;
+- gate;
+- human_gate;
+- rollback/revoke;
+- doctor;
+- test suite;
+- documentazione;
+- configurazione Replit.
+
+5. Per ogni componente indica:
+
+- file responsabili;
+- stato: implementato / parziale / simulato / obsoleto;
+- dipendenze;
+- failure mode;
+- livello di copertura test;
+- rischio residuo.
+
+FASE 2 — AUDIT DI SICUREZZA E INTEGRITÀ
+
+6. Verifica almeno:
+
+- nessun fallback silenzioso a FakeModel;
+- identità provider e is_simulated persistiti;
+- budget chiamate/token/costo fail-closed;
+- path traversal e symlink escape;
+- isolamento staging/target;
+- atomicità della promozione;
+- rollback compensativo;
+- append-only reale dell’audit;
+- consistenza transazionale DB/filesystem;
+- recovery dopo crash;
+- idempotenza approve/reject/revoke;
+- concorrenza fra candidate;
+- impossibilità per submit/verify/evaluator/diagnostics/test di approvare;
+- approvazione disabilitata di default;
+- assenza di secret nei log, DB, audit e report;
+- challenge monouso e scadenza;
+- impossibilità di riutilizzo della challenge;
+- comportamento in TTY, non-TTY, pytest, CI e Agent;
+- target_project vuoto;
+- candidate 2 ancora approval_revoked;
+- storia dell’incidente intatta.
+
+7. Cerca esplicitamente:
+
+- funzioni non più usate;
+- vecchi percorsi di approvazione ancora importabili;
+- bypass indiretti;
+- configurazioni duplicate;
+- migrazioni fragili;
+- documentazione falsa o obsoleta;
+- file “Pasted-*”, artefatti Agent o memory accidentalmente versionati;
+- dati runtime/DB che non dovrebbero essere pubblicati;
+- chiavi, token o frammenti di secret nella cronologia Git.
+
+Non stampare eventuali secret trovati: riporta solo file, tipo di rischio e azione necessaria.
+
+FASE 3 — TEST E VERIFICA
+
+8. Esegui la suite completa senza provider reale.
+
+9. Riporta:
+
+- test raccolti;
+- passati;
+- falliti;
+- skipped;
+- durata;
+- warning;
+- test che toccano filesystem reale;
+- test che usano DB reale;
+- test dipendenti dall’ordine;
+- copertura non verificata.
+
+10. Esegui doctor nelle modalità sicure disponibili:
+
+- simulated;
+- real configuration check senza chiamata;
+- approval disabled.
+
+11. Non effettuare alcuna chiamata OpenAI.
+
+FASE 4 — DOCUMENTAZIONE E REALTÀ
+
+12. Confronta README.md, PLAN.md e qualsiasi documento operativo con il codice.
+
+13. Elenca ogni divergenza, soprattutto su:
+
+- versione corrente;
+- provider reale;
+- FakeModel;
+- doctor;
+- Structured Outputs;
+- limiti economici;
+- staging;
+- candidate;
+- approval_revoked;
+- gate umano;
+- comandi CLI realmente validi;
+- stato del progetto;
+- funzionalità mancanti.
+
+Non aggiornare ancora i documenti durante l’audit.
+
+FASE 5 — VALUTAZIONE OPERATIVA ED ECONOMICA
+
+14. Valuta separatamente:
+
+A. Foundry tecnica:
+capacità di trasformare una specifica in candidate testata.
+
+B. Mercury economico:
+capacità di osservare mercato, scegliere opportunità, validare domanda, vendere, consegnare e misurare outcome economici.
+
+15. Non confondere le due cose.
+
+16. Indica cosa manca realmente per passare da:
+
+“motore sicuro che genera candidate software”
+
+a:
+
+“sistema che può produrre esiti monetizzabili”.
+
+17. Ordina i gap secondo:
+
+- blocco critico;
+- rischio;
+- impatto economico;
+- costo/tempo;
+- dipendenze.
+
+OUTPUT OBBLIGATORIO
+
+Crea un report:
+
+data/MF-AUDIT-004-report.md
+
+Il report deve contenere:
+
+1. Executive summary.
+2. Verifica sincronizzazione Git.
+3. Commit auditato.
+4. Architettura reale.
+5. Stato dei componenti.
+6. Risultati test.
+7. Sicurezza e integrità.
+8. Divergenze documentazione/codice.
+9. Debito tecnico.
+10. Gap per V1 tecnico.
+11. Gap per Mercury economicamente operativo.
+12. Rischi ordinati per severità.
+13. Piano minimo consigliato in massimo 5 fasi.
+14. Elenco esatto dei file da modificare nel prossimo intervento.
+15. Go / Conditional Go / No-Go.
+
+REGOLE
+
+- Questa operazione è audit-only.
+- Non correggere problemi durante l’audit.
+- Non fare refactoring.
+- Non aggiornare README o PLAN.
+- Non eseguire provider calls.
+- Non alterare DB, candidate, decisioni, audit o target.
+- Non fare push automatico.
+- Se trovi un rischio critico, continua comunque la lettura e produci il report completo, salvo rischio di esposizione secret.
+
+REPORT FINALE IN CHAT
+
+Riporta:
+
+- commit realmente auditato;
+- stato sincronizzazione Git;
+- test raccolti/passati/falliti;
+- numero di criticità critical/high/medium/low;
+- giudizio Go/Conditional Go/No-Go;
+- percentuale reale di completamento:
+  - Foundry tecnica;
+  - V1 sicura;
+  - Mercury economico;
+- confidenza della valutazione;
+- zero chiamate provider confermate.
