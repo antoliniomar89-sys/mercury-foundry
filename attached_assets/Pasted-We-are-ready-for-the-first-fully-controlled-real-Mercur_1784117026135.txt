@@ -1,0 +1,85 @@
+We are ready for the first fully controlled real Mercury Foundry run.
+
+Do not implement the requested change directly yourself.
+Use the existing Mercury Foundry CLI and its real OpenAI provider so that the change is produced through the actual Foundry workflow.
+
+OBJECTIVE
+
+Run exactly one real Foundry submission against target_project.
+
+Requested target change:
+
+Create exactly one new file:
+
+target_project/MERCURY_FOUNDRY_PROBE.md
+
+Its complete content must be exactly:
+
+# Mercury Foundry Real-Provider Probe
+
+status: candidate
+purpose: verify the complete controlled real-provider workflow
+
+No other target_project file may be created, modified, renamed or deleted.
+
+SUCCESS CRITERIA
+
+1. The request passes through the existing workflow:
+   SPEC → PLAN → BUILD → TEST → FIX if needed → VERIFY → CANDIDATE.
+
+2. Use the configured real OpenAI provider and the OPENAI_API_KEY Replit Secret.
+
+3. Use gpt-4o-mini unless the current configuration explicitly requires another already-supported model.
+
+4. Allow:
+   - maximum 2 provider calls;
+   - maximum 2 automatic attempts;
+   - maximum 2,000 total tokens;
+   - maximum estimated cost of $0.01.
+
+5. Verification must check:
+   - the file exists;
+   - its content matches exactly;
+   - no other file inside target_project changed.
+
+6. Preserve sandbox restrictions and fail closed on any unexpected write.
+
+7. Produce a candidate with:
+   - provider_name;
+   - model;
+   - is_simulated=false;
+   - run ID;
+   - attempt count;
+   - files changed;
+   - verification result;
+   - token usage;
+   - estimated cost;
+   - audit evidence.
+
+8. Do not approve, merge, apply or promote the candidate automatically.
+
+9. Stop at the mandatory human approval gate.
+
+10. Do not make unrelated source-code changes to Mercury Foundry.
+
+EXECUTION PROCESS
+
+A. Run doctor in real-provider mode.
+B. If the status is not READY_REAL, stop without making a provider call and report the blocker.
+C. Show the exact Foundry submission and command you will execute.
+D. Execute exactly one controlled Foundry run.
+E. Inspect the resulting candidate and audit records.
+F. Report:
+   - doctor status;
+   - run status;
+   - candidate status;
+   - exact target files changed;
+   - verification evidence;
+   - provider and model;
+   - real versus simulated;
+   - calls, attempts and token usage;
+   - estimated cost;
+   - whether the human approval gate is still blocking promotion.
+
+Do not perform any further provider calls after this run.
+Do not approve the candidate.
