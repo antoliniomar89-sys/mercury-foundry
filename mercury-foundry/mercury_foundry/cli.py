@@ -5,6 +5,7 @@ Comandi:
   status [--goal ID]             mostra lo stato di goal/task/candidate/attempts
   approve <candidate_id>         approva una candidate (Approval Gate umano)
   reject <candidate_id>          rifiuta una candidate
+  export-candidate <id>          esporta il pacchetto di una candidate per revisione (senza promuovere)
   audit [--entity-type T --entity-id N] [--limit N]   mostra l'audit log
 """
 
@@ -18,7 +19,14 @@ from pathlib import Path
 from mercury_foundry.ai.errors import ProviderExecutionError
 from mercury_foundry.ai.provider_factory import ProviderUnavailableError, get_provider
 from mercury_foundry.approval import gate
-from mercury_foundry.approval.human_gate import HumanApprovalToken, RuntimeApprovalBlockedError, approve_candidate as human_approve_candidate
+from mercury_foundry.approval.human_gate import (
+    ApprovalChannelDisabledError,
+    ApprovalSecretMissingError,
+    HumanApprovalToken,
+    RuntimeApprovalBlockedError,
+    approve_candidate as human_approve_candidate,
+    export_candidate_package,
+)
 from mercury_foundry.audit.logger import list_audit_log
 from mercury_foundry.diagnostics import run_doctor
 from mercury_foundry.policy.literal_constraints import LiteralConstraints
@@ -178,11 +186,54 @@ def cmd_approve(args: argparse.Namespace) -> int:
     try:
         token = HumanApprovalToken(args.confirm_id)
         human_approve_candidate(foundry.conn, args.candidate_id, rationale=args.reason, token=token)
+    except ApprovalChannelDisabledError as exc:
+        print(f"[approve] CANALE DISABILITATO: {exc}")
+        return 1
+    except ApprovalSecretMissingError as exc:
+        print(f"[approve] SEGRETO MANCANTE: {exc}")
+        return 1
     except RuntimeApprovalBlockedError as exc:
         print(f"[approve] BLOCCATO: {exc}")
         return 1
 
     print(f"[candidate {args.candidate_id}] approvata da umano. rationale={args.reason!r}")
+    return 0
+
+
+def cmd_export_candidate(args: argparse.Namespace) -> int:
+    """Esporta il pacchetto di una candidate per revisione umana esterna.
+
+    Non promuove nulla nel target reale. Non crea decisioni. Mostra il
+    manifest e lista i file dello staging; crea uno zip se --output-dir
+    è specificato.
+    """
+    import json as _json
+
+    foundry = build_foundry(db_path=args.db, sandbox_root=args.sandbox)
+    output_dir = Path(args.output_dir) if args.output_dir else None
+
+    result = export_candidate_package(foundry.conn, args.candidate_id, output_dir=output_dir)
+
+    print(f"[export-candidate] candidate_id={result['candidate_id']} status={result['status']}")
+    print(f"[export-candidate] provider={result['provider_name']} simulated={result['is_simulated']}")
+    print(f"[export-candidate] promoted=False  target_modified=False")
+    print()
+    print("[manifest]")
+    print(_json.dumps(result["manifest"], indent=2, ensure_ascii=False))
+
+    if result["staging_files"]:
+        print()
+        print("[staging files]")
+        for rel, info in result["staging_files"].items():
+            print(f"  {rel}  ({info['size']} byte)  {info['path']}")
+    else:
+        print()
+        print("[staging files] staging non più disponibile (già rimossa dopo la promozione)")
+
+    if result["zip_path"]:
+        print()
+        print(f"[zip] pacchetto esportato in: {result['zip_path']}")
+
     return 0
 
 
@@ -273,6 +324,20 @@ def build_parser() -> argparse.ArgumentParser:
     p_reject.add_argument("candidate_id", type=int)
     p_reject.add_argument("--reason", default=None)
     p_reject.set_defaults(func=cmd_reject)
+
+    p_export = subparsers.add_parser(
+        "export-candidate",
+        help="esporta il pacchetto di una candidate per revisione umana (senza promuovere)",
+    )
+    p_export.add_argument("candidate_id", type=int)
+    p_export.add_argument(
+        "--output-dir",
+        default=None,
+        dest="output_dir",
+        metavar="DIR",
+        help="se specificato, crea uno zip del pacchetto nella cartella indicata",
+    )
+    p_export.set_defaults(func=cmd_export_candidate)
 
     p_audit = subparsers.add_parser("audit", help="mostra l'audit log append-only")
     p_audit.add_argument("--entity-type", default=None)

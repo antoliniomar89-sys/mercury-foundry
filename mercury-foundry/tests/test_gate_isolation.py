@@ -176,11 +176,20 @@ def test_test_helper_cannot_touch_real_target(tmp_path):
 # ---------------------------------------------------------------------------
 
 def test_human_gate_blocked_under_pytest(tmp_path):
-    """human_gate.approve_candidate è bloccata quando PYTEST_CURRENT_TEST è impostata.
-    Questa variabile è impostata automaticamente da pytest: il test stesso è
-    la prova che il blocco funziona."""
+    """human_gate.approve_candidate è bloccata quando il canale è disabilitato (default).
+    In questo workspace MERCURY_HUMAN_APPROVAL_ENABLED non è impostata, quindi il
+    primo check fallisce con ApprovalChannelDisabledError prima ancora del check pytest.
+    Il test verifica che la candidate resti pending_review e che l'audit sia registrato."""
+    from mercury_foundry.approval.human_gate import ApprovalChannelDisabledError
+    from mercury_foundry.audit.logger import list_audit_log
+
     assert os.environ.get("PYTEST_CURRENT_TEST"), (
         "Questo test deve girare sotto pytest (PYTEST_CURRENT_TEST deve essere impostata)."
+    )
+    # Verifica che il canale sia effettivamente disabilitato nel workspace corrente
+    import mercury_foundry.approval.human_gate as hg
+    assert not hg.is_channel_enabled(), (
+        "Il canale non deve essere abilitato nel workspace Agent"
     )
 
     foundry = _build_isolated(tmp_path)
@@ -190,14 +199,20 @@ def test_human_gate_blocked_under_pytest(tmp_path):
 
     token = HumanApprovalToken(f"APPROVE-{candidate_id}-CONFIRMED")
 
-    with pytest.raises(RuntimeApprovalBlockedError) as exc_info:
+    # Con il canale disabilitato l'errore è ApprovalChannelDisabledError, non RuntimeApprovalBlockedError
+    with pytest.raises(ApprovalChannelDisabledError) as exc_info:
         human_approve_candidate(
             foundry.conn,
             candidate_id,
             token=token,
             backup_base_dir=foundry.backup_base_dir,
         )
-    assert "PYTEST_CURRENT_TEST" in str(exc_info.value)
+    assert "MERCURY_HUMAN_APPROVAL_ENABLED" in str(exc_info.value)
+
+    # L'audit APPROVAL_CHANNEL_DISABLED deve essere stato registrato
+    audit_rows = list_audit_log(foundry.conn, limit=50)
+    disabled_events = [r for r in audit_rows if r["action"] == "APPROVAL_CHANNEL_DISABLED"]
+    assert len(disabled_events) >= 1, "Audit APPROVAL_CHANNEL_DISABLED non registrato"
 
     # La candidate deve essere rimasta pending_review
     candidate = models.get_candidate(foundry.conn, candidate_id)
@@ -218,7 +233,7 @@ def test_human_gate_blocked_without_token(tmp_path):
     import mercury_foundry.approval.human_gate as hg
     original = hg._assert_human_context
 
-    def _only_token_check(cid, token):
+    def _only_token_check(conn, cid, token):
         if token is None:
             raise RuntimeApprovalBlockedError(
                 f"approve_candidate (human_gate) bloccata: nessun HumanApprovalToken fornito."
@@ -250,7 +265,7 @@ def test_human_gate_blocked_with_wrong_token(tmp_path):
     import mercury_foundry.approval.human_gate as hg
     original = hg._assert_human_context
 
-    def _only_token_check(cid, token):
+    def _only_token_check(conn, cid, token):
         if token is None:
             raise RuntimeApprovalBlockedError("token mancante")
         expected = f"APPROVE-{cid}-CONFIRMED"
@@ -489,7 +504,10 @@ def test_no_provider_calls_during_revoke_incident(tmp_path):
 
 
 def test_no_provider_calls_during_human_gate_check(tmp_path):
-    """Il blocco di human_gate non effettua chiamate al provider."""
+    """Il blocco di human_gate non effettua chiamate al provider.
+    Con il canale disabilitato (default) il blocco avviene prima di qualsiasi chiamata."""
+    from mercury_foundry.approval.human_gate import ApprovalChannelDisabledError
+
     foundry = _build_isolated(tmp_path)
     goal_id = foundry.orchestrator.submit_goal("test no calls in gate check")
     run_result = foundry.orchestrator.run_goal(goal_id)
@@ -498,7 +516,8 @@ def test_no_provider_calls_during_human_gate_check(tmp_path):
     calls_before = foundry.conn.execute("SELECT COUNT(*) as n FROM provider_calls").fetchone()["n"]
 
     token = HumanApprovalToken(f"APPROVE-{candidate_id}-CONFIRMED")
-    with pytest.raises(RuntimeApprovalBlockedError):
+    # Con il canale disabilitato si ottiene ApprovalChannelDisabledError (sottoclasse di RuntimeError)
+    with pytest.raises((ApprovalChannelDisabledError, RuntimeApprovalBlockedError)):
         human_approve_candidate(foundry.conn, candidate_id, token=token,
                                 backup_base_dir=foundry.backup_base_dir)
 

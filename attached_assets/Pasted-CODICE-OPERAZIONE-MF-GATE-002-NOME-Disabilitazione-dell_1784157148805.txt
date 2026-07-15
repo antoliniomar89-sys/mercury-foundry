@@ -1,0 +1,99 @@
+CODICE OPERAZIONE: MF-GATE-002
+NOME: Disabilitazione dell’approvazione nel workspace Agent
+
+Non effettuare chiamate al provider.
+Non eseguire nuovi run.
+Non modificare target_project.
+Non approvare o rifiutare candidate reali.
+Lavora soltanto su codice e test isolati.
+
+CONTESTO
+
+MF-INCIDENT-001 è stato recuperato correttamente:
+
+- candidate 2 = approval_revoked;
+- target_project vuoto;
+- storia approve originale conservata;
+- audit compensativo presente;
+- suite 182/182 verde.
+
+Il nuovo human_gate.py blocca pytest, ambienti non interattivi e token errati.
+
+Tuttavia il token:
+
+APPROVE-{candidate_id}-CONFIRMED
+
+è prevedibile e non rappresenta un’autorità posseduta esclusivamente dall’operatore umano.
+
+OBIETTIVO
+
+Rendere tecnicamente impossibile approvare candidate dal workspace Replit usato dall’Agent.
+
+REQUISITI
+
+1. Introdurre una configurazione esplicita:
+
+   MERCURY_HUMAN_APPROVAL_ENABLED
+
+2. Il valore predefinito deve essere false.
+
+3. Quando false:
+
+   - qualsiasi comando o funzione di approvazione deve fermarsi fail-closed;
+   - nessun file deve essere promosso;
+   - nessuna decisione approve deve essere creata;
+   - deve essere registrato un audit APPROVAL_CHANNEL_DISABLED.
+
+4. Il normale workspace Agent deve mantenere l’approvazione disabilitata.
+
+5. Submit, doctor, verify, evaluator, diagnostica e test non devono poterla abilitare autonomamente.
+
+6. Non è sufficiente passare:
+   --enable-approval
+   oppure una normale variabile dichiarata nel comando.
+
+7. Per una futura approvazione reale richiedere contemporaneamente:
+
+   - MERCURY_HUMAN_APPROVAL_ENABLED=true;
+   - terminale interattivo reale;
+   - segreto MERCURY_HUMAN_APPROVAL_SECRET;
+   - challenge generata casualmente e monouso;
+   - conferma candidate_id;
+   - scadenza temporale breve;
+   - nessuna esecuzione sotto pytest o automazione.
+
+8. Il segreto non deve essere registrato, stampato o salvato nel database.
+
+9. Nel workspace attuale non configurare il segreto e non abilitare il canale.
+
+10. Aggiungere un comando sicuro per esportare il pacchetto della candidate per revisione umana, senza promuoverlo.
+
+TEST OBBLIGATORI
+
+- approvazione disabilitata per default;
+- token prevedibile non sufficiente;
+- variabile enabled senza segreto non sufficiente;
+- segreto senza TTY non sufficiente;
+- challenge riutilizzata rifiutata;
+- challenge scaduta rifiutata;
+- pytest sempre bloccato;
+- submit e verify incapaci di approvare;
+- target reale mai toccato dai test;
+- export candidate non promuove;
+- suite completa senza regressioni.
+
+REPORT FINALE
+
+Riporta:
+
+- file modificati;
+- comportamento predefinito;
+- nuovo protocollo di approvazione;
+- test raccolti/passati/falliti;
+- conferma target_project vuoto;
+- conferma candidate 2 invariata in approval_revoked;
+- conferma zero chiamate provider;
+- limiti residui.
+
+Non abilitare realmente l’approvazione.
+Non inserire o richiedere secret durante questa operazione.
