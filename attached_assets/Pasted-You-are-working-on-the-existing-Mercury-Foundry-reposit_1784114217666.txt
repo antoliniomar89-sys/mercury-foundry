@@ -1,0 +1,116 @@
+You are working on the existing Mercury Foundry repository after completion of V0.1.
+
+Do not redesign the project. Preserve the current deterministic workflow, CLI, SQLite state, audit log, sandbox restrictions, attempt limits, strict provider registry, doctor command, test suite, candidate metadata, and mandatory human approval gate.
+
+GOAL
+
+Implement Mercury Foundry V0.2 by adding the first real AI provider integration in the smallest safe and testable way.
+
+This task is not to build the full Mercury system and not to add multiple providers or a multi-agent architecture.
+
+REQUIRED OUTCOMES
+
+1. Add exactly one real AI provider implementation.
+
+2. Prefer an OpenAI-compatible provider abstraction, but do not hardcode credentials, model names, endpoints or secrets.
+
+3. All credentials must come from environment variables or Replit Secrets.
+
+4. Provider selection must remain explicit:
+   - fake-deterministic
+   - real provider
+   - unknown providers must fail closed
+   - no silent fallback is allowed
+
+5. Add configuration for:
+   - provider name
+   - model name
+   - API base URL where applicable
+   - timeout
+   - maximum calls per run
+   - maximum token budget or equivalent usage budget
+   - maximum estimated monetary cost per run
+
+6. Every real provider invocation must record:
+   - provider
+   - model
+   - is_simulated=false
+   - request timestamp
+   - response timestamp
+   - success or failure
+   - call number
+   - usage metadata when available
+   - estimated cost when calculable
+   - run and candidate association
+
+7. Secrets and full prompts/responses must not be written to ordinary logs by default. Add safe redaction and bounded diagnostic logging.
+
+8. Extend the doctor command so that:
+   - fake mode can return READY_SIMULATED
+   - correctly configured real mode can return READY_REAL
+   - missing or invalid real-provider configuration returns NOT_READY
+   - credentials are never printed
+
+9. Add automatic blocking for:
+   - missing credentials
+   - unknown model
+   - timeout
+   - call limit exceeded
+   - token or usage budget exceeded
+   - estimated cost budget exceeded
+   - malformed provider response
+
+10. Preserve FakeModel and all existing deterministic tests.
+
+11. Add tests using mocks only. Automated tests must never call the external provider.
+
+12. Test at least:
+   - healthy real-provider configuration;
+   - missing credential rejection;
+   - explicit provider selection;
+   - no fallback to FakeModel;
+   - timeout handling;
+   - malformed response handling;
+   - call-limit blocking;
+   - usage-budget blocking;
+   - cost-budget blocking;
+   - provider metadata persistence;
+   - secret redaction;
+   - existing V0.1 regression suite.
+
+13. Add a CLI command or safe test mode that performs one explicitly authorized real-provider connectivity check without modifying the target project.
+
+14. Do not execute a real paid API call automatically during implementation. Stop before the real connectivity check and clearly tell the human exactly which secret and configuration values must be supplied.
+
+15. Update README.md and PLAN.md with:
+   - exact configuration steps;
+   - safety limits;
+   - simulated versus real behavior;
+   - what V0.2 does and does not do.
+
+EXECUTION PROCESS
+
+Before modifying code:
+
+A. Inspect the current V0.1 repository.
+B. Confirm the actual implemented architecture and test count.
+C. Identify where the provider adapter belongs.
+D. Present the smallest coherent implementation plan.
+
+Then implement.
+
+After implementation:
+
+E. Run the complete test suite.
+F. Run doctor in simulated mode.
+G. Demonstrate doctor failing safely for incomplete real mode.
+H. Demonstrate mocked successful real-provider execution.
+I. List all changed files.
+J. Clearly separate:
+   - implemented and verified;
+   - implemented but awaiting credentials;
+   - still missing for V1.
+
+Do not stop after writing code. Continue until the mocked test suite passes or report the exact blocker.
+
+Do not make unrelated changes.

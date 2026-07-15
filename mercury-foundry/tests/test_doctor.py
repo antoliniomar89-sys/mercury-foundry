@@ -2,6 +2,7 @@
 
 from mercury_foundry.diagnostics import (
     OVERALL_NOT_READY,
+    OVERALL_READY_REAL,
     OVERALL_READY_SIMULATED,
     run_doctor,
 )
@@ -77,3 +78,45 @@ def test_doctor_with_unknown_provider_is_not_ready(tmp_path):
     assert report.overall_status == OVERALL_NOT_READY
     provider_check = next(c for c in report.checks if c.name == "ai_provider")
     assert provider_check.status == "error"
+
+
+def test_doctor_real_provider_without_credentials_is_not_ready(tmp_path, monkeypatch):
+    for name in [
+        "MERCURY_AI_API_KEY", "MERCURY_AI_MODEL", "MERCURY_AI_API_BASE_URL",
+        "MERCURY_AI_TIMEOUT_SECONDS", "MERCURY_AI_MAX_CALLS_PER_RUN",
+        "MERCURY_AI_MAX_TOKENS_PER_RUN", "MERCURY_AI_MAX_COST_USD_PER_RUN",
+    ]:
+        monkeypatch.delenv(name, raising=False)
+
+    report = run_doctor(
+        db_path=tmp_path / "mercury_foundry.db",
+        sandbox_root=tmp_path / "target_project",
+        provider_name="openai",
+    )
+
+    assert report.overall_status == OVERALL_NOT_READY
+    provider_check = next(c for c in report.checks if c.name == "ai_provider")
+    assert provider_check.status == "error"
+    assert "MERCURY_AI_API_KEY" in provider_check.detail
+
+
+def test_doctor_real_provider_fully_configured_is_ready_real(tmp_path, monkeypatch):
+    monkeypatch.setenv("MERCURY_AI_API_KEY", "sk-test-doctor-check")
+    monkeypatch.setenv("MERCURY_AI_MODEL", "test-model")
+    monkeypatch.setenv("MERCURY_AI_API_BASE_URL", "https://example-provider.invalid/v1")
+    monkeypatch.setenv("MERCURY_AI_TIMEOUT_SECONDS", "10")
+    monkeypatch.setenv("MERCURY_AI_MAX_CALLS_PER_RUN", "3")
+    monkeypatch.setenv("MERCURY_AI_MAX_TOKENS_PER_RUN", "1000")
+    monkeypatch.setenv("MERCURY_AI_MAX_COST_USD_PER_RUN", "1.0")
+
+    report = run_doctor(
+        db_path=tmp_path / "mercury_foundry.db",
+        sandbox_root=tmp_path / "target_project",
+        provider_name="openai",
+    )
+
+    assert report.overall_status == OVERALL_READY_REAL
+    provider_check = next(c for c in report.checks if c.name == "ai_provider")
+    assert provider_check.status == "ok"
+    assert "sk-test-doctor-check" not in provider_check.detail
+    assert "reale" in provider_check.detail.lower()

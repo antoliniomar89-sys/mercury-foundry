@@ -12,6 +12,8 @@ from typing import Callable
 
 from mercury_foundry.ai.fake_model import FakeModel
 from mercury_foundry.ai.provider import AIProvider
+from mercury_foundry.ai.provider_config import ProviderConfigError, load_real_provider_config
+from mercury_foundry.ai.real_provider import OpenAICompatibleProvider
 
 
 class ProviderUnavailableError(RuntimeError):
@@ -23,14 +25,30 @@ class ProviderUnavailableError(RuntimeError):
     """
 
 
+def _build_openai_compatible_provider() -> AIProvider:
+    """Carica la configurazione del provider reale da env/secrets e lo istanzia.
+
+    Se la configurazione è incompleta (credenziali, modello, base url o limiti
+    mancanti), fallisce qui con un errore chiaro: nessun fallback a FakeModel.
+    """
+    try:
+        config = load_real_provider_config()
+    except ProviderConfigError as exc:
+        raise ProviderUnavailableError(
+            f"Provider 'openai' selezionato ma non configurabile: {exc}"
+        ) from exc
+    return OpenAICompatibleProvider(config)
+
+
 # Registry esplicito dei provider disponibili in questa istanza. Aggiungere un
-# provider reale (es. Anthropic/OpenAI) significa aggiungere una entry qui,
-# nient'altro: Orchestrator/Builder/Evaluator/ExecutionLoop/ApprovalGate non
-# devono cambiare. `is_simulated` è dichiarato qui in modo esplicito e
-# indipendente dall'implementazione, per poter essere ispezionato anche senza
-# istanziare il provider (usato da `doctor` e dai test).
+# provider reale ulteriore significa aggiungere una entry qui, nient'altro:
+# Orchestrator/Builder/Evaluator/ExecutionLoop/ApprovalGate non devono
+# cambiare. `is_simulated` è dichiarato qui in modo esplicito e indipendente
+# dall'implementazione, per poter essere ispezionato anche senza istanziare il
+# provider (usato da `doctor` e dai test).
 PROVIDER_REGISTRY: dict[str, Callable[[], AIProvider]] = {
     "fake": FakeModel,
+    "openai": _build_openai_compatible_provider,
 }
 
 SIMULATED_PROVIDER_NAMES: frozenset[str] = frozenset({"fake"})

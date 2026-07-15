@@ -70,6 +70,28 @@ CREATE TABLE IF NOT EXISTS candidates (
     created_at TEXT NOT NULL
 );
 
+-- Telemetria per-chiamata del provider AI (reale o simulato). Popolata SOLO
+-- quando un provider produce un ProviderCallRecord (i provider simulati non
+-- fanno chiamate esterne, quindi normalmente non generano righe qui).
+CREATE TABLE IF NOT EXISTS provider_calls (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    goal_id INTEGER REFERENCES goals(id),
+    task_id INTEGER REFERENCES tasks(id),
+    attempt_id INTEGER REFERENCES attempts(id),
+    candidate_id INTEGER REFERENCES candidates(id),
+    provider_name TEXT NOT NULL,
+    model TEXT,
+    is_simulated INTEGER NOT NULL,
+    call_number INTEGER NOT NULL,
+    requested_at TEXT NOT NULL,
+    responded_at TEXT,
+    success INTEGER NOT NULL, -- 0/1
+    usage_json TEXT,
+    estimated_cost_usd REAL,
+    error_summary TEXT, -- SEMPRE già redatto: mai segreti/prompt completi
+    created_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS audit_log (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     entity_type TEXT NOT NULL, -- goal | task | attempt | candidate | decision

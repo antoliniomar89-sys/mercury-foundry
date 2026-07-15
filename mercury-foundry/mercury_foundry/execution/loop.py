@@ -15,8 +15,35 @@ from dataclasses import dataclass
 from mercury_foundry import config
 from mercury_foundry.agents.builder import Builder
 from mercury_foundry.agents.evaluator import Evaluator
+from mercury_foundry.ai.errors import ProviderExecutionError
 from mercury_foundry.audit.logger import log_action
 from mercury_foundry.state import models
+
+
+def _persist_call_record(conn, *, goal_id: int, task_id: int, attempt_id: int | None, record) -> None:
+    """Persiste un ProviderCallRecord, se il provider ne ha prodotto uno.
+
+    I provider simulati (FakeModel) non fanno chiamate esterne e lasciano
+    `last_call_record = None`: in quel caso non viene scritta alcuna riga.
+    """
+    if record is None:
+        return
+    models.create_provider_call(
+        conn,
+        goal_id=goal_id,
+        task_id=task_id,
+        attempt_id=attempt_id,
+        provider_name=record.provider_name,
+        model=record.model,
+        is_simulated=record.is_simulated,
+        call_number=record.call_number,
+        requested_at=record.requested_at,
+        responded_at=record.responded_at,
+        success=record.success,
+        usage=record.usage,
+        estimated_cost_usd=record.estimated_cost_usd,
+        error_summary=record.error_summary,
+    )
 
 
 @dataclass
@@ -61,7 +88,52 @@ class ExecutionLoop:
                 payload={"attempt_number": attempt_number, "previous_failure": previous_failure},
             )
 
-            build_result = self.builder.build(description, attempt_number, previous_failure)
+            try:
+                build_result = self.builder.build(description, attempt_number, previous_failure)
+            except ProviderExecutionError as exc:
+                _persist_call_record(
+                    self.conn,
+                    goal_id=goal_id,
+                    task_id=task_id,
+                    attempt_id=attempt_id,
+                    record=self.builder.ai_provider.last_call_record,
+                )
+                log_action(
+                    self.conn,
+                    entity_type="attempt",
+                    entity_id=attempt_id,
+                    action="PROVIDER_CALL_BLOCKED",
+                    actor="system",
+                    payload={
+                        "attempt_number": attempt_number,
+                        "error_type": type(exc).__name__,
+                        "message": str(exc),
+                        "provider_name": self.builder.ai_provider.name,
+                    },
+                )
+                models.update_attempt(
+                    self.conn, attempt_id, phase="BLOCKED", status="failure", close=True
+                )
+                models.update_task_status(self.conn, task_id, "blocked")
+                log_action(
+                    self.conn,
+                    entity_type="task",
+                    entity_id=task_id,
+                    action="TASK_BLOCKED",
+                    actor="system",
+                    payload={"reason": "provider_execution_error", "error_type": type(exc).__name__},
+                )
+                # Fail-closed: un errore del provider reale non consuma un tentativo
+                # automatico di retry, blocca subito il task per intervento umano.
+                return TaskOutcome(task_id=task_id, status="blocked", attempts_used=attempt_number)
+
+            _persist_call_record(
+                self.conn,
+                goal_id=goal_id,
+                task_id=task_id,
+                attempt_id=attempt_id,
+                record=self.builder.ai_provider.last_call_record,
+            )
             models.update_attempt(
                 self.conn,
                 attempt_id,
@@ -152,6 +224,7 @@ class ExecutionLoop:
                         "is_simulated": build_result.proposal.is_simulated,
                     },
                 )
+                models.attach_candidate_to_provider_calls(self.conn, task_id, candidate_id)
                 return TaskOutcome(
                     task_id=task_id,
                     status="candidate_created",

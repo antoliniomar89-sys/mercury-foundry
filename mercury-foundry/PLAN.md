@@ -1,6 +1,22 @@
-# Mercury Foundry V0 / V0.1 — Architettura e stato implementato
+# Mercury Foundry V0 / V0.1 / V0.2 — Architettura e stato implementato
 
-Stato: **implementato e testato**. Questo documento descrive l'architettura come effettivamente costruita (non più una bozza pre-codice). V0 (ciclo end-to-end minimo) e V0.1 (audit di sicurezza + `doctor` + rafforzamento del provider AI) sono entrambe complete.
+Stato: **implementato e testato**. Questo documento descrive l'architettura come effettivamente costruita (non più una bozza pre-codice). V0 (ciclo end-to-end minimo), V0.1 (audit di sicurezza + `doctor` + rafforzamento del provider AI) e V0.2 (primo provider AI reale, spento di default) sono tutte complete.
+
+## -1. Cosa è cambiato in V0.2 rispetto a V0.1
+
+V0.1 aveva un registro provider fail-closed ma un solo provider implementato (`FakeModel`). V0.2 aggiunge il primo provider realmente collegabile a un'API a pagamento, senza mai eseguirne una chiamata automaticamente:
+
+- **`mercury_foundry/ai/real_provider.py`** (`OpenAICompatibleProvider`): implementa `AIProvider` parlando con un endpoint "chat completions" compatibile OpenAI. Nessuna credenziale/endpoint/modello hardcoded — tutto da `RealProviderConfig` (`ai/provider_config.py`), caricata SOLO da variabili d'ambiente (vedi `README.md` per l'elenco completo). L'HTTP è iniettabile (`http_post`), quindi i test non fanno mai una chiamata di rete reale.
+- **Registrato come `"openai"` in `PROVIDER_REGISTRY`**: selezionarlo senza configurazione completa fa fallire `get_provider` con `ProviderUnavailableError` — stesso principio fail-closed già usato per i provider sconosciuti in V0.1, ora estenso alla configurazione incompleta di un provider noto.
+- **Gerarchia di eccezioni** (`ai/errors.py`): `ProviderCredentialsMissingError`, `ProviderConfigurationError`, `ProviderTimeoutError`, `ProviderCallLimitExceededError`, `ProviderUsageBudgetExceededError`, `ProviderCostBudgetExceededError`, `ProviderMalformedResponseError`, `ProviderUnknownModelError` — tutte sotto `ProviderExecutionError`. Ogni chiamata reale applica il blocco automatico corrispondente (limite chiamate, budget token, budget costo, timeout, risposta malformata, modello sconosciuto) PRIMA o dopo la chiamata secondo il caso, senza mai concedere un retry silenzioso.
+- **`ProviderCallRecord`** (`ai/provider.py`): metadata di ogni invocazione reale (provider, modello, esito, timing, usage, costo stimato, `error_summary` sempre redatto). I provider simulati non lo popolano (`last_call_record = None`): nessuna riga di telemetria "reale" viene mai scritta per `FakeModel`.
+- **Tabella `provider_calls`** + funzioni CRUD in `state/models.py`: ogni `ProviderCallRecord` prodotto da un provider reale viene persistito da `execution/loop.py`/`orchestrator.py`, collegato a goal/task/attempt e, quando esiste, alla candidate finale.
+- **Blocco fail-safe del task/goal**: se `propose_plan`/`propose_patch` sollevano un `ProviderExecutionError`, `Orchestrator`/`ExecutionLoop` non consumano un tentativo di retry — bloccano subito il task/goal, scrivono `PROVIDER_CALL_BLOCKED` nell'audit log e persistono la chiamata fallita (redatta) se presente.
+- **`doctor` estesa**: la stessa funzione `_check_provider` (già presente in V0.1) ora copre anche la configurazione del provider reale — `READY_REAL` solo se tutte le variabili sono presenti e coerenti, `NOT_READY` con l'elenco (mai i valori) delle variabili mancanti altrimenti.
+- **CLI: `check-provider`**: verifica di connettività esplicita, non scrive in `target_project/`, non fa alcuna chiamata senza `--confirm`, non viene mai invocata automaticamente dal resto del sistema.
+- **Test**: `tests/test_real_provider.py` (14 test, tutti con HTTP mockato: configurazione, chiamata riuscita con metadata corretti, ognuno dei 7 blocchi automatici, redazione dei segreti, integrazione con `provider_factory`, persistenza di `provider_calls` durante un run bloccato) + estensione di `tests/test_doctor.py` per `READY_REAL`/`NOT_READY` in modalità reale.
+
+**Nessuna chiamata reale a pagamento è stata eseguita durante lo sviluppo di V0.2**: in questo ambiente non erano configurate credenziali, quindi `--provider openai` fallisce già al passo di configurazione (comportamento verificato e voluto).
 
 ## 0. Cosa è cambiato in V0.1 rispetto a V0
 
@@ -220,6 +236,20 @@ Verificato con `tests/test_execution_loop_e2e_healthcheck.py::test_end_to_end_he
 
 Verificato con `tests/test_doctor.py`, `tests/test_provider_safety.py`, `tests/test_audit_and_approval.py` e con l'estensione del test end-to-end esistente.
 
+## 6.ter Criteri di accettazione aggiuntivi V0.2 — tutti verificati
+
+- [x] Esiste esattamente un provider AI reale collegato (`"openai"`, OpenAI-compatibile), dietro la stessa interfaccia `AIProvider`, senza credenziali/endpoint/modello hardcoded nel codice.
+- [x] Selezionare il provider reale senza configurazione completa fallisce subito con un errore chiaro (`ProviderUnavailableError`), senza fallback a `FakeModel`.
+- [x] Ogni invocazione reale produce metadata completi (provider, modello, esito, timing, usage, costo stimato) persistiti in `provider_calls`, collegati a run/candidate quando esiste.
+- [x] I segreti (api key) non appaiono mai in log, audit log, `error_summary` o output CLI — verificato sia per errori "puliti" sia per errori che nella risposta mock contenevano la chiave.
+- [x] Blocco automatico su: credenziali mancanti, modello sconosciuto, timeout, limite chiamate superato, budget token superato, budget costo superato, risposta malformata — nessuno di questi consuma un tentativo di retry automatico.
+- [x] `doctor` distingue `READY_REAL` (provider reale configurato correttamente) da `NOT_READY` (configurazione incompleta), senza mai stampare i valori delle credenziali.
+- [x] Nessun test della suite automatica esegue una chiamata di rete reale (tutti usano `http_post` mockato).
+- [x] Esiste un comando (`check-provider`) per un test di connettività reale, esplicitamente autorizzato dall'umano (`--confirm`) e mai eseguito automaticamente dal resto del sistema; non scrive in `target_project/`.
+- [x] Nessuna chiamata reale a pagamento è stata eseguita durante l'implementazione (nessuna credenziale era configurata in questo ambiente).
+
+Verificato con `tests/test_real_provider.py`, l'estensione di `tests/test_doctor.py`, ed esecuzione reale della CLI (`doctor`, `check-provider` senza e con `--confirm`, in entrambi i casi senza credenziali configurate).
+
 ## 7. Piano di implementazione — stato: completato
 
 **V0** (completato):
@@ -240,10 +270,18 @@ Verificato con `tests/test_doctor.py`, `tests/test_provider_safety.py`, `tests/t
 13. Estensione della suite di test (25 test totali) per copertura di doctor, sicurezza del provider, approval gate, audit append-only.
 14. Aggiornamento di `README.md` e `PLAN.md` allo stato reale implementato.
 
-**Non ancora fatto (esplicitamente fuori scope per V0.1, da valutare per V1):**
-- Nessun provider AI reale è implementato o collegato (nessuna chiamata a pagamento è mai stata effettuata).
+**V0.2** (completato — primo provider AI reale, spento di default, nessuna chiamata a pagamento eseguita):
+15. `ai/real_provider.py` (`OpenAICompatibleProvider`), `ai/provider_config.py` (configurazione solo da env, nessun default hardcoded), `ai/errors.py` (gerarchia di blocco automatico).
+16. Registrazione di `"openai"` in `PROVIDER_REGISTRY`, fail-closed su configurazione incompleta.
+17. Tabella `provider_calls` + persistenza dei metadata di ogni chiamata reale da `execution/loop.py`/`orchestrator.py`, con blocco fail-safe del task/goal su qualunque `ProviderExecutionError`.
+18. Estensione di `doctor` per `READY_REAL`/`NOT_READY` in modalità reale; comando CLI `check-provider` per una verifica di connettività esplicitamente autorizzata dall'umano.
+19. `tests/test_real_provider.py` (14 test, HTTP sempre mockato) + estensione di `tests/test_doctor.py`.
+20. Aggiornamento di `README.md` e `PLAN.md` allo stato reale implementato.
+
+**Non ancora fatto (esplicitamente fuori scope per V0.2, da valutare per V1):**
+- Nessuna chiamata reale al provider `"openai"` è mai stata eseguita con credenziali vere (nessuna era disponibile in questo ambiente): l'implementazione è verificata solo con HTTP mockato + verifica di configurazione.
 - Nessuna interfaccia oltre alla CLI.
-- Nessun deploy o azione esterna (rete, email, spesa) — per scelta, non per limite tecnico.
+- Nessun deploy o azione esterna (rete, email, spesa) oltre alla chiamata AI stessa — per scelta, non per limite tecnico.
 
 ---
 

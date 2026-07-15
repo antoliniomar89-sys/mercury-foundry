@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from typing import Any
 
 
 @dataclass
@@ -32,11 +33,37 @@ class PatchProposal:
     is_simulated: bool = True
 
 
+@dataclass
+class ProviderCallRecord:
+    """Metadata di UNA invocazione del provider AI, per persistenza/audit.
+
+    Popolato dai provider reali dopo ogni chiamata (riuscita o fallita).
+    I provider simulati (FakeModel) non fanno alcuna chiamata esterna e
+    lasciano `last_call_record = None`: nulla viene registrato come se fosse
+    una chiamata reale.
+    """
+
+    provider_name: str
+    model: str | None
+    is_simulated: bool
+    call_number: int
+    requested_at: str
+    responded_at: str | None
+    success: bool
+    usage: dict[str, Any] | None = None
+    estimated_cost_usd: float | None = None
+    error_summary: str | None = None  # SEMPRE già redatto: mai segreti/prompt completi
+
+
 class AIProvider(ABC):
     """Interfaccia che ogni provider (reale o simulato) deve implementare."""
 
     name: str = "unnamed-provider"
     is_simulated: bool = True
+
+    # Impostato dai provider reali dopo ogni propose_plan/propose_patch.
+    # None per i provider simulati o prima della prima chiamata.
+    last_call_record: ProviderCallRecord | None = None
 
     @abstractmethod
     def propose_plan(self, goal_description: str) -> list[str]:

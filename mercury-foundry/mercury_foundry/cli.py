@@ -14,11 +14,69 @@ import argparse
 import json
 import sys
 
+from mercury_foundry.ai.errors import ProviderExecutionError
+from mercury_foundry.ai.provider_factory import ProviderUnavailableError, get_provider
 from mercury_foundry.approval import gate
 from mercury_foundry.audit.logger import list_audit_log
 from mercury_foundry.diagnostics import run_doctor
 from mercury_foundry.state import models
 from mercury_foundry.wiring import build_foundry
+
+
+def cmd_check_provider(args: argparse.Namespace) -> int:
+    """Verifica di connettività ESPLICITA verso un provider reale.
+
+    Non scrive nulla in target_project/ (non usa Builder/Workspace): fa solo
+    UNA chiamata di pianificazione minimale, se e solo se `--confirm` è
+    passato esplicitamente. Senza `--confirm` non viene eseguita alcuna
+    chiamata (nessuna chiamata a pagamento automatica).
+    """
+    provider_name = args.provider or "openai"
+
+    if not args.confirm:
+        print(
+            f"[check-provider] provider richiesto: '{provider_name}'. Nessuna chiamata eseguita: "
+            "ripetere il comando con --confirm per autorizzare esplicitamente una chiamata reale "
+            "(può avere un costo)."
+        )
+        return 0
+
+    try:
+        provider = get_provider(provider_name)
+    except ProviderUnavailableError as exc:
+        print(f"[check-provider] provider non configurabile in modo sicuro: {exc}")
+        return 1
+
+    if provider.is_simulated:
+        print(
+            f"[check-provider] provider '{provider.name}' è SIMULATO (is_simulated=True): "
+            "nessuna chiamata di rete da verificare."
+        )
+        return 0
+
+    print(f"[check-provider] provider reale confermato: '{provider.name}'. Eseguo una chiamata di prova...")
+    try:
+        plan = provider.propose_plan(
+            "Rispondi SOLO con un array JSON con un solo elemento: la stringa 'connectivity check ok'."
+        )
+    except ProviderExecutionError as exc:
+        record = provider.last_call_record
+        print(f"[check-provider] chiamata fallita: {type(exc).__name__}: {exc}")
+        if record is not None:
+            print(
+                f"  call_number={record.call_number} success={record.success} "
+                f"error={record.error_summary}"
+            )
+        return 1
+
+    record = provider.last_call_record
+    print(f"[check-provider] chiamata riuscita. Risposta: {plan}")
+    if record is not None:
+        print(
+            f"  model={record.model} usage={record.usage} "
+            f"estimated_cost_usd={record.estimated_cost_usd}"
+        )
+    return 0
 
 
 def _simulated_tag(is_simulated: bool) -> str:
@@ -125,6 +183,17 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_doctor = subparsers.add_parser("doctor", help="diagnostica lo stato dell'installazione")
     p_doctor.set_defaults(func=cmd_doctor)
+
+    p_check_provider = subparsers.add_parser(
+        "check-provider",
+        help="verifica di connettività esplicita verso un provider reale (nessuna scrittura in target_project)",
+    )
+    p_check_provider.add_argument(
+        "--confirm",
+        action="store_true",
+        help="autorizza esplicitamente l'esecuzione di UNA chiamata reale (può avere un costo)",
+    )
+    p_check_provider.set_defaults(func=cmd_check_provider)
 
     p_submit = subparsers.add_parser("submit", help="sottomette un obiettivo ed esegue il ciclo completo")
     p_submit.add_argument("description", help="descrizione testuale dell'obiettivo")

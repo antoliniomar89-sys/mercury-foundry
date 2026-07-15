@@ -5,6 +5,7 @@ from __future__ import annotations
 import sqlite3
 from dataclasses import dataclass
 
+from mercury_foundry.ai.errors import ProviderExecutionError
 from mercury_foundry.ai.provider import AIProvider
 from mercury_foundry.audit.logger import log_action
 from mercury_foundry.execution.loop import ExecutionLoop, TaskOutcome
@@ -36,7 +37,51 @@ class Orchestrator:
             payload={"description": description},
         )
 
-        task_descriptions = decompose_goal(description, self.ai_provider)
+        try:
+            task_descriptions = decompose_goal(description, self.ai_provider)
+        except ProviderExecutionError as exc:
+            record = self.ai_provider.last_call_record
+            if record is not None:
+                models.create_provider_call(
+                    self.conn,
+                    goal_id=goal_id,
+                    task_id=None,
+                    attempt_id=None,
+                    provider_name=record.provider_name,
+                    model=record.model,
+                    is_simulated=record.is_simulated,
+                    call_number=record.call_number,
+                    requested_at=record.requested_at,
+                    responded_at=record.responded_at,
+                    success=record.success,
+                    usage=record.usage,
+                    estimated_cost_usd=record.estimated_cost_usd,
+                    error_summary=record.error_summary,
+                )
+            log_action(
+                self.conn,
+                entity_type="goal",
+                entity_id=goal_id,
+                action="PROVIDER_CALL_BLOCKED",
+                actor="system",
+                payload={
+                    "error_type": type(exc).__name__,
+                    "message": str(exc),
+                    "provider_name": self.ai_provider.name,
+                    "phase": "PLAN",
+                },
+            )
+            models.update_goal_status(self.conn, goal_id, "blocked")
+            log_action(
+                self.conn,
+                entity_type="goal",
+                entity_id=goal_id,
+                action="GOAL_BLOCKED",
+                actor="system",
+                payload={"reason": "provider_execution_error_during_plan", "error_type": type(exc).__name__},
+            )
+            raise
+
         for index, task_description in enumerate(task_descriptions):
             task_id = models.create_task(
                 self.conn, goal_id, index, task_description, assigned_to="builder"

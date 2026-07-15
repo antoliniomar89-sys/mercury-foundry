@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from datetime import datetime, timezone
 
@@ -222,6 +223,81 @@ def create_decision(
     )
     conn.commit()
     return cur.lastrowid
+
+
+# --- provider_calls ----------------------------------------------------------------
+
+def create_provider_call(
+    conn: sqlite3.Connection,
+    *,
+    goal_id: int | None,
+    task_id: int | None,
+    attempt_id: int | None,
+    provider_name: str,
+    model: str | None,
+    is_simulated: bool,
+    call_number: int,
+    requested_at: str,
+    responded_at: str | None,
+    success: bool,
+    usage: dict | None,
+    estimated_cost_usd: float | None,
+    error_summary: str | None,
+    candidate_id: int | None = None,
+) -> int:
+    """Registra UNA invocazione del provider AI. `error_summary` deve arrivare
+    già redatto (nessun segreto/prompt completo) — questo livello non applica
+    ulteriore redazione."""
+    cur = conn.execute(
+        """
+        INSERT INTO provider_calls (
+            goal_id, task_id, attempt_id, candidate_id, provider_name, model, is_simulated,
+            call_number, requested_at, responded_at, success, usage_json, estimated_cost_usd,
+            error_summary, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            goal_id,
+            task_id,
+            attempt_id,
+            candidate_id,
+            provider_name,
+            model,
+            1 if is_simulated else 0,
+            call_number,
+            requested_at,
+            responded_at,
+            1 if success else 0,
+            json.dumps(usage, ensure_ascii=False) if usage is not None else None,
+            estimated_cost_usd,
+            error_summary,
+            _now(),
+        ),
+    )
+    conn.commit()
+    return cur.lastrowid
+
+
+def attach_candidate_to_provider_calls(conn: sqlite3.Connection, task_id: int, candidate_id: int) -> None:
+    """Collega retroattivamente le provider_calls di un task alla candidate creata,
+    così ogni chiamata resta associata sia al run che alla candidate finale."""
+    conn.execute(
+        "UPDATE provider_calls SET candidate_id = ? WHERE task_id = ? AND candidate_id IS NULL",
+        (candidate_id, task_id),
+    )
+    conn.commit()
+
+
+def list_provider_calls_for_task(conn: sqlite3.Connection, task_id: int) -> list[sqlite3.Row]:
+    return conn.execute(
+        "SELECT * FROM provider_calls WHERE task_id = ? ORDER BY id ASC", (task_id,)
+    ).fetchall()
+
+
+def list_provider_calls_for_goal(conn: sqlite3.Connection, goal_id: int) -> list[sqlite3.Row]:
+    return conn.execute(
+        "SELECT * FROM provider_calls WHERE goal_id = ? ORDER BY id ASC", (goal_id,)
+    ).fetchall()
 
 
 def any_candidate_is_simulated(conn: sqlite3.Connection, goal_id: int | None = None) -> bool:
