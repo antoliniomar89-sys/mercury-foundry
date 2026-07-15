@@ -1,0 +1,135 @@
+CODICE OPERAZIONE: MF-RUN-003
+NOME: Primo probe reale completo con staging e gate umano effettivo
+
+Sei autorizzato a eseguire esattamente un solo run reale controllato di Mercury Foundry.
+
+Non implementare direttamente i file.
+Usa esclusivamente la CLI e il workflow reale della Foundry.
+
+PRIMA DEL RUN
+
+1. Verifica che target_project sia completamente vuoto.
+2. Verifica che la candidate legacy precedente sia rejected.
+3. Esegui doctor con il provider reale.
+4. Procedi soltanto se doctor termina con READY_REAL.
+5. Mostra prima dell’esecuzione:
+   - comando CLI esatto;
+   - provider;
+   - modello;
+   - massimo numero di chiamate;
+   - massimo numero di tentativi;
+   - limite token;
+   - limite di costo.
+
+COMANDO
+
+cd mercury-foundry
+
+python3 -m mercury_foundry.cli submit \
+"crea MERCURY_FOUNDRY_PROBE.md e test_mercury_foundry_probe.py secondo probe_constraints.json" \
+--provider openai \
+--literal-constraints probe_constraints.json
+
+LIMITI
+
+- massimo 2 chiamate reali al provider;
+- massimo 2 tentativi;
+- massimo 2.000 token complessivi;
+- costo stimato massimo 0,01 USD;
+- nessun retry oltre questi limiti;
+- nessuna chiamata reale successiva al run.
+
+WORKFLOW RICHIESTO
+
+SPEC
+→ PLAN
+→ BUILD NELLO STAGING
+→ TEST NELLO STAGING
+→ VERIFY NELLO STAGING
+→ CANDIDATE PENDING_REVIEW
+→ STOP AL GATE UMANO
+
+REQUISITI OBBLIGATORI
+
+1. BUILD, TEST e VERIFY devono operare esclusivamente nello staging.
+
+2. target_project deve rimanere byte-identico e vuoto durante tutto il run.
+
+3. Devono essere prodotti nello staging esclusivamente:
+
+- MERCURY_FOUNDRY_PROBE.md
+- test_mercury_foundry_probe.py
+
+4. I contenuti devono rispettare esattamente probe_constraints.json.
+
+5. required_files e allowed_files devono essere entrambi soddisfatti.
+
+6. Non devono esistere file extra, cache, file .pyc o directory persistenti inattese.
+
+7. Esegui esclusivamente exact_test_command definito nei literal constraints.
+
+8. Registra una sola provider_call per ogni chiamata reale.
+
+9. Collega alla candidate tutte le chiamate del run_id, incluse PLAN e BUILD/PATCH.
+
+10. La candidate deve contenere:
+
+- run_id;
+- attempt_id;
+- provider;
+- modello;
+- is_simulated=false;
+- manifest completo;
+- snapshot/hash iniziale del target;
+- riferimento allo staging;
+- file creati, modificati ed eliminati;
+- hash e dimensioni;
+- risultato TEST;
+- risultato VERIFY;
+- chiamate provider associate;
+- token e costo totali.
+
+11. Non approvare, promuovere o copiare i file nel vero target_project.
+
+12. Fermati obbligatoriamente con candidate pending_review.
+
+VERIFICHE FINALI
+
+Controlla e riporta:
+
+- codice operazione MF-RUN-003;
+- doctor status;
+- run_id;
+- attempt_id;
+- stato del run;
+- stato della candidate;
+- candidate_id;
+- provider e modello;
+- is_simulated;
+- chiamate reali effettuate;
+- dettaglio PLAN e BUILD;
+- token input, output e totali;
+- costo per chiamata e costo totale;
+- file presenti nello staging;
+- contenuto esatto del file Markdown;
+- risultato byte-per-byte;
+- risultato dei test;
+- risultato VERIFY;
+- presenza di file extra;
+- manifest della candidate;
+- record provider_calls;
+- associazioni candidate_provider_calls;
+- audit evidence;
+- stato finale di target_project;
+- conferma che il gate umano stia impedendo la promozione.
+
+Se qualsiasi requisito fallisce:
+
+- fermati fail-closed;
+- non approvare nulla;
+- non modificare target_project;
+- non effettuare altre chiamate;
+- indica la causa precisa.
+
+Non approvare la candidate.
+Non eseguire altre chiamate reali dopo questo run.
