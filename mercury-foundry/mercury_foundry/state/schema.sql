@@ -73,7 +73,29 @@ CREATE TABLE IF NOT EXISTS candidates (
     provider_name TEXT NOT NULL,
     is_simulated INTEGER NOT NULL,
     created_at TEXT NOT NULL
+    -- Colonne di staging/manifest (run_id, attempt_id, staging_root,
+    -- target_snapshot_hash, manifest_json) sono aggiunte idempotentemente da
+    -- `state.db._migrate_candidates_columns`, per lo stesso motivo delle
+    -- altre migrazioni in questo file: `CREATE TABLE IF NOT EXISTS` non
+    -- altera una tabella `candidates` già esistente da una versione precedente.
 );
+
+-- Associazione candidate<->provider_calls, APPEND-ONLY: sostituisce il
+-- pattern precedente (un UPDATE retroattivo di provider_calls.candidate_id),
+-- che violava l'append-only-ness della tabella provider_calls. Una candidate
+-- può riferirsi a più chiamate provider dello stesso task; ogni riga qui è
+-- scritta una sola volta e mai aggiornata/cancellata (idempotente tramite
+-- l'indice univoco sotto: un secondo tentativo di associare la stessa coppia
+-- non crea una seconda riga).
+CREATE TABLE IF NOT EXISTS candidate_provider_calls (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    candidate_id INTEGER NOT NULL REFERENCES candidates(id),
+    provider_call_id INTEGER NOT NULL REFERENCES provider_calls(id),
+    created_at TEXT NOT NULL
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_candidate_provider_calls_dedup
+    ON candidate_provider_calls(candidate_id, provider_call_id);
 
 -- Telemetria per-chiamata del provider AI (reale o simulato). Popolata SOLO
 -- quando un provider produce un ProviderCallRecord (i provider simulati non

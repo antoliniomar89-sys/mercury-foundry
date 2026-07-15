@@ -382,7 +382,7 @@ def _build_foundry_with_provider(tmp_path, provider):
     workspace = Workspace(tmp_path / "target_project")
     builder = Builder(provider, workspace)
     evaluator = Evaluator(TestRunner(workspace.root))
-    execution_loop = ExecutionLoop(conn, builder, evaluator)
+    execution_loop = ExecutionLoop(conn, builder, evaluator, staging_base_dir=tmp_path / "mf_staging")
     orchestrator = Orchestrator(conn, provider, execution_loop)
     return conn, workspace, orchestrator
 
@@ -408,6 +408,20 @@ def test_execution_loop_deterministically_corrects_paraphrased_content(tmp_path)
     outcome = goal_run.task_outcomes[0]
     assert outcome.status == "candidate_created"
 
+    # Da MF-FIX-004: la correzione deterministica vive nello staging isolato
+    # della candidate finché non arriva un'approvazione umana esplicita — il
+    # target reale resta intatto fino a quel momento.
+    from pathlib import Path
+
+    from mercury_foundry.approval import gate
+    from mercury_foundry.state import models
+
+    candidate = models.get_candidate(conn, outcome.candidate_id)
+    staged = (Path(candidate["staging_root"]) / "PROBE.md").read_text(encoding="utf-8")
+    assert staged == constraints.exact_file_content
+    assert not (workspace.root / "PROBE.md").exists()
+
+    gate.approve_candidate(conn, outcome.candidate_id)
     written = (workspace.root / "PROBE.md").read_text(encoding="utf-8")
     assert written == constraints.exact_file_content
 
@@ -518,6 +532,12 @@ def test_engine_runs_exact_test_command_not_the_providers_generic_test(tmp_path)
     # eseguire il comando di test esatto, quindi il comando reale passa e la
     # candidate viene creata correttamente (non per merito del test always-true).
     assert goal_run.final_status == "awaiting_approval"
+    outcome = goal_run.task_outcomes[0]
+
+    from mercury_foundry.approval import gate
+    from mercury_foundry.state import models
+
+    gate.approve_candidate(conn, outcome.candidate_id)
     assert (workspace.root / "PROBE.md").read_text(encoding="utf-8") == constraints.exact_file_content
 
 

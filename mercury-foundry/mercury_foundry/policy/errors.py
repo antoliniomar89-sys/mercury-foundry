@@ -28,3 +28,14 @@ class BuildIncompleteError(RuntimeError):
     significativo. Bloccata PRIMA di qualunque scrittura in sandbox e PRIMA
     che TEST possa partire — non consuma un tentativo di FIX/retry
     automatico, richiede intervento umano sul piano/provider."""
+
+
+class TargetConflictError(RuntimeError):
+    """Il target_project reale è cambiato rispetto allo snapshot iniziale
+    registrato quando lo staging della candidate è stato creato.
+
+    Promuovere adesso rischierebbe di sovrascrivere silenziosamente un
+    cambiamento intercorso nel target dopo la creazione della candidate.
+    Blocco fail-closed: nessuna scrittura sul target, la candidate resta
+    `pending_review` (o viene marcata `conflict`), serve una nuova candidate
+    o una decisione umana esplicita su come procedere."""

@@ -34,7 +34,7 @@ def _build_foundry_with_provider(tmp_path, provider):
     workspace = Workspace(tmp_path / "target_project")
     builder = Builder(provider, workspace)
     evaluator = Evaluator(TestRunner(workspace.root))
-    execution_loop = ExecutionLoop(conn, builder, evaluator)
+    execution_loop = ExecutionLoop(conn, builder, evaluator, staging_base_dir=tmp_path / "mf_staging")
     orchestrator = Orchestrator(conn, provider, execution_loop)
     return conn, workspace, orchestrator
 
@@ -96,7 +96,14 @@ def test_multi_step_plan_is_aggregated_into_a_single_task(tmp_path):
 def test_two_mandatory_files_split_across_plan_steps_both_end_up_written(tmp_path):
     """Il caso end-to-end del bug originale: entrambi i file richiesti
     (uno per step di piano) vengono scritti da UNA SOLA BUILD atomica, e TEST
-    parte solo dopo che entrambi esistono davvero."""
+    parte solo dopo che entrambi esistono davvero.
+
+    Da MF-FIX-004: la BUILD scrive solo nello staging isolato del tentativo,
+    mai nel target reale — quindi qui si verifica lo staging della candidate,
+    poi (approvando) si verifica che la promozione scriva davvero nel target."""
+    from mercury_foundry.approval import gate
+    from mercury_foundry.state import models
+
     provider = _FragmentingProvider()
     conn, workspace, orchestrator = _build_foundry_with_provider(tmp_path, provider)
 
@@ -105,6 +112,18 @@ def test_two_mandatory_files_split_across_plan_steps_both_end_up_written(tmp_pat
 
     assert goal_run.final_status == "awaiting_approval"
     assert len(goal_run.task_outcomes) == 1
+    candidate_id = goal_run.task_outcomes[0].candidate_id
+    candidate = models.get_candidate(conn, candidate_id)
+    staging_root = candidate["staging_root"]
+    assert staging_root is not None
+    from pathlib import Path
+
+    assert (Path(staging_root) / "capability.py").exists()
+    assert (Path(staging_root) / "tests" / "test_capability.py").exists()
+    # Il target reale non è ancora stato toccato: nessuna approvazione umana ancora.
+    assert not (workspace.root / "capability.py").exists()
+
+    gate.approve_candidate(conn, candidate_id)
     assert (workspace.root / "capability.py").exists()
     assert (workspace.root / "tests" / "test_capability.py").exists()
 
@@ -417,7 +436,7 @@ def test_real_provider_two_step_plan_still_uses_exactly_two_provider_calls(tmp_p
     workspace = Workspace(tmp_path / "target_project")
     builder = Builder(provider, workspace)
     evaluator = Evaluator(TestRunner(workspace.root))
-    execution_loop = ExecutionLoop(conn, builder, evaluator)
+    execution_loop = ExecutionLoop(conn, builder, evaluator, staging_base_dir=tmp_path / "mf_staging")
     orchestrator = Orchestrator(conn, provider, execution_loop)
 
     goal_id = orchestrator.submit_goal("crea la capability con applicativo e test")

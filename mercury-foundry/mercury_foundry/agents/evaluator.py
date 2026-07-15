@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 
 from mercury_foundry.testing.runner import TestRunner, TestRunResult
 
@@ -19,7 +20,15 @@ class Evaluator:
         self.test_runner = test_runner
 
     def evaluate(
-        self, command: list[str] | None = None, env: dict[str, str] | None = None
+        self,
+        cwd: Path | None = None,
+        command: list[str] | None = None,
+        env: dict[str, str] | None = None,
     ) -> EvalResult:
-        result: TestRunResult = self.test_runner.run(command=command, env=env)
+        """Esegue i test in `cwd` (lo staging isolato del tentativo corrente).
+
+        `cwd` è opzionale solo per retro-compatibilità con un `TestRunner`
+        costruito con un `sandbox_root` fisso; il chiamante principale
+        (ExecutionLoop) lo passa sempre esplicitamente."""
+        result: TestRunResult = self.test_runner.run(command=command, env=env, cwd=cwd)
         return EvalResult(passed=result.passed, output=result.output, duration_ms=result.duration_ms)

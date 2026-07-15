@@ -163,7 +163,7 @@ def test_real_provider_end_to_end_workflow_with_structured_mocked_responses(tmp_
     workspace = Workspace(tmp_path / "target_project")
     builder = Builder(provider, workspace)
     evaluator = Evaluator(TestRunner(workspace.root))
-    execution_loop = ExecutionLoop(conn, builder, evaluator)
+    execution_loop = ExecutionLoop(conn, builder, evaluator, staging_base_dir=tmp_path / "mf_staging")
     orchestrator = Orchestrator(conn, provider, execution_loop)
 
     # SPEC -> PLAN (1a chiamata reale, mockata: PlanSchema)
@@ -226,15 +226,16 @@ def test_real_provider_end_to_end_workflow_with_structured_mocked_responses(tmp_
         assert expected in actions, f"azione mancante nell'audit log: {expected}"
 
     # Gate di approvazione umana: OBBLIGATORIO e non bypassabile.
-    with pytest.raises(gate.InvalidCandidateStateError):
-        # Sanity check: non è già approvata prima dell'azione umana esplicita.
-        gate.reject_candidate(conn, outcome.candidate_id, rationale="controllo")
-        gate.reject_candidate(conn, outcome.candidate_id, rationale="doppio rifiuto non valido")
+    # Sanity check: la candidate non è già approvata/rifiutata prima
+    # dell'azione umana esplicita.
+    assert candidate["status"] == "pending_review"
 
-    # Ripristina lo stato e approva davvero (percorso principale del test).
-    conn.execute("UPDATE candidates SET status = 'pending_review' WHERE id = ?", (outcome.candidate_id,))
-    conn.commit()
-
+    # Da MF-FIX-004: un reject non è più un semplice cambio di stato — pulisce
+    # anche lo staging della candidate (irreversibile), quindi non può più
+    # essere "annullato" con un semplice reset dello stato via SQL come prima
+    # di questo task. Il doppio-reject-rifiutato è già coperto da
+    # `test_audit_and_approval.py`; qui si passa direttamente al percorso
+    # principale del test: l'approvazione reale.
     gate.approve_candidate(conn, outcome.candidate_id, rationale="Workflow end-to-end mockato superato")
     candidate_after = models.get_candidate(conn, outcome.candidate_id)
     assert candidate_after["status"] == "approved"

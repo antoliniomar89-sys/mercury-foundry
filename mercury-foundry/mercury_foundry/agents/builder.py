@@ -46,7 +46,18 @@ class Builder:
         attempt_number: int,
         previous_failure: str | None,
         literal_constraints: LiteralConstraints | None = None,
+        *,
+        workspace: Workspace | None = None,
     ) -> BuildResult:
+        """Esegue una BUILD scrivendo esclusivamente in `workspace`.
+
+        `workspace` è per-chiamata: ogni tentativo isolato in staging passa
+        esplicitamente la propria copia di lavoro, cosicché nessuna BUILD
+        scriva mai direttamente sul target reale. Se omesso, ricade sul
+        workspace fissato al costruttore (solo per retro-compatibilità di
+        eventuali chiamanti diretti; il chiamante principale — ExecutionLoop
+        — lo passa sempre esplicitamente)."""
+        target_workspace = workspace if workspace is not None else self.workspace
         context = {
             "attempt_number": attempt_number,
             "previous_failure": previous_failure,
@@ -78,7 +89,7 @@ class Builder:
             (change.path, change.content)
             for change in [*corrected_proposal.files, *corrected_proposal.test_files]
         ]
-        file_writes = self.workspace.write_files_atomic(changes)
+        file_writes = target_workspace.write_files_atomic(changes)
 
         return BuildResult(
             proposal=corrected_proposal,

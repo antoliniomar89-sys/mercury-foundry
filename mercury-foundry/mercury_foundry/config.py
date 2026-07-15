@@ -15,6 +15,13 @@ TARGET_PROJECT_DIR = BASE_DIR / "target_project"
 DATA_DIR = BASE_DIR / "data"
 DEFAULT_DB_PATH = DATA_DIR / "mercury_foundry.db"
 
+# Radice sotto cui vive lo staging isolato per-tentativo (mai target_project):
+# ogni tentativo scrive in STAGING_BASE_DIR/<run_id>/<attempt_id>/, una copia
+# fisicamente separata di TARGET_PROJECT_DIR. Solo l'Approval Gate, dopo
+# un'approvazione umana esplicita, applica le differenze dallo staging al
+# target reale (vedi `sandbox.staging.promote_staging`).
+STAGING_BASE_DIR = DATA_DIR / "staging"
+
 SCHEMA_PATH = BASE_DIR / "mercury_foundry" / "state" / "schema.sql"
 
 # Vincolo esplicito richiesto: default 3 tentativi automatici per task.

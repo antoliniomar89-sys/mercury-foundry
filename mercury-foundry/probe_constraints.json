@@ -5,6 +5,10 @@
     "MERCURY_FOUNDRY_PROBE.md",
     "test_mercury_foundry_probe.py"
   ],
+  "required_files": [
+    "MERCURY_FOUNDRY_PROBE.md",
+    "test_mercury_foundry_probe.py"
+  ],
   "forbidden_extra_files": true,
   "exact_test_command": "PYTHONDONTWRITEBYTECODE=1 pytest -q -p no:cacheprovider",
   "byte_exact_required": true

@@ -25,6 +25,7 @@ def init_schema(conn: sqlite3.Connection) -> None:
     conn.commit()
     _migrate_provider_calls_columns(conn)
     _migrate_goals_columns(conn)
+    _migrate_candidates_columns(conn)
 
 
 def _migrate_provider_calls_columns(conn: sqlite3.Connection) -> None:
@@ -62,4 +63,27 @@ def _migrate_goals_columns(conn: sqlite3.Connection) -> None:
     existing_columns = {row["name"] for row in conn.execute("PRAGMA table_info(goals)").fetchall()}
     if "literal_constraints_json" not in existing_columns:
         conn.execute("ALTER TABLE goals ADD COLUMN literal_constraints_json TEXT")
+    conn.commit()
+
+
+def _migrate_candidates_columns(conn: sqlite3.Connection) -> None:
+    """Aggiunge in modo idempotente le colonne di staging/manifest a `candidates`.
+
+    Stesso pattern delle altre migrazioni in questo file. Queste colonne
+    supportano il modello "candidate = riferimento immutabile a uno staging
+    isolato + manifest completo", mai popolate scrivendo direttamente sul
+    target reale."""
+    existing_columns = {
+        row["name"] for row in conn.execute("PRAGMA table_info(candidates)").fetchall()
+    }
+    new_columns = {
+        "run_id": "TEXT",
+        "attempt_id": "INTEGER",
+        "staging_root": "TEXT",
+        "target_snapshot_hash": "TEXT",
+        "manifest_json": "TEXT",
+    }
+    for name, sql_type in new_columns.items():
+        if name not in existing_columns:
+            conn.execute(f"ALTER TABLE candidates ADD COLUMN {name} {sql_type}")
     conn.commit()

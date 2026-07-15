@@ -171,19 +171,47 @@ def create_candidate(
     *,
     provider_name: str,
     is_simulated: bool,
+    run_id: str | None = None,
+    attempt_id: int | None = None,
+    staging_root: str | None = None,
+    target_snapshot_hash: str | None = None,
+    manifest_json: str | None = None,
 ) -> int:
     """Crea una candidate. `provider_name`/`is_simulated` sono obbligatori:
 
     ogni candidate deve poter essere ispezionata senza ambiguità su chi/cosa
     ha generato la patch verificata, per non scambiare un risultato simulato
     per una generazione AI reale.
+
+    `staging_root`/`target_snapshot_hash`/`manifest_json` collegano la
+    candidate IMMUTABILMENTE al proprio staging isolato: lo staging non viene
+    eliminato quando una candidate nasce `pending_review`, resta a
+    disposizione dell'Approval Gate per la promozione o la pulizia dopo un
+    reject. `target_snapshot_hash` è l'hash del target REALE al momento della
+    creazione dello staging: usato per rilevare un conflitto (target
+    cambiato) al momento dell'approvazione.
     """
     cur = conn.execute(
         """
-        INSERT INTO candidates (goal_id, task_id, summary, status, provider_name, is_simulated, created_at)
-        VALUES (?, ?, ?, 'pending_review', ?, ?, ?)
+        INSERT INTO candidates (
+            goal_id, task_id, summary, status, provider_name, is_simulated, created_at,
+            run_id, attempt_id, staging_root, target_snapshot_hash, manifest_json
+        )
+        VALUES (?, ?, ?, 'pending_review', ?, ?, ?, ?, ?, ?, ?, ?)
         """,
-        (goal_id, task_id, summary, provider_name, 1 if is_simulated else 0, _now()),
+        (
+            goal_id,
+            task_id,
+            summary,
+            provider_name,
+            1 if is_simulated else 0,
+            _now(),
+            run_id,
+            attempt_id,
+            staging_root,
+            target_snapshot_hash,
+            manifest_json,
+        ),
     )
     conn.commit()
     return cur.lastrowid
@@ -357,14 +385,38 @@ def persist_provider_call_record(
     )
 
 
-def attach_candidate_to_provider_calls(conn: sqlite3.Connection, task_id: int, candidate_id: int) -> None:
-    """Collega retroattivamente le provider_calls di un task alla candidate creata,
-    così ogni chiamata resta associata sia al run che alla candidate finale."""
-    conn.execute(
-        "UPDATE provider_calls SET candidate_id = ? WHERE task_id = ? AND candidate_id IS NULL",
-        (candidate_id, task_id),
-    )
+def associate_candidate_provider_calls(conn: sqlite3.Connection, task_id: int, candidate_id: int) -> None:
+    """Collega le provider_calls di un task alla candidate creata, in modo
+    APPEND-ONLY: inserisce righe in `candidate_provider_calls`, non aggiorna
+    mai `provider_calls` (che resta append-only e immutabile riga per riga,
+    per riga già scritta). Idempotente: rilanciare questa funzione per la
+    stessa (task, candidate) non produce righe duplicate (INSERT OR IGNORE
+    contro l'indice univoco della tabella)."""
+    calls = list_provider_calls_for_task(conn, task_id)
+    now = _now()
+    for call in calls:
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO candidate_provider_calls (candidate_id, provider_call_id, created_at)
+            VALUES (?, ?, ?)
+            """,
+            (candidate_id, call["id"], now),
+        )
     conn.commit()
+
+
+def list_candidate_provider_calls(conn: sqlite3.Connection, candidate_id: int) -> list[sqlite3.Row]:
+    """Tutte le provider_calls associate a una candidate, tramite la tabella
+    di giunzione append-only (mai tramite provider_calls.candidate_id)."""
+    return conn.execute(
+        """
+        SELECT pc.* FROM provider_calls pc
+        JOIN candidate_provider_calls cpc ON cpc.provider_call_id = pc.id
+        WHERE cpc.candidate_id = ?
+        ORDER BY pc.id ASC
+        """,
+        (candidate_id,),
+    ).fetchall()
 
 
 def list_provider_calls_for_task(conn: sqlite3.Connection, task_id: int) -> list[sqlite3.Row]:

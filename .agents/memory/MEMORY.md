@@ -6,3 +6,4 @@
 - [Literal content enforcement pattern](literal-content-enforcement.md) — exact file paths/content/test commands must be engine-enforced deterministically, never left to model regeneration.
 - [Real-provider call budget vs planning](real-provider-call-budget-vs-planning.md) — a tight max-calls-per-run budget can be exhausted by the model's own multi-step plan before any FIX retry happens; check audit log to tell budget exhaustion from an enforcement bug.
 - [Atomic BUILD aggregation and build-completeness gate](atomic-build-aggregation.md) — multi-step plans must aggregate into one atomic BUILD before TEST; fail-closed completeness gate blocks partial builds without consuming a retry.
+- [Mercury Foundry candidate staging & atomic promotion](mercury-foundry-candidate-staging.md) — BUILD/TEST/VERIFY run against an isolated staging copy; only the approval gate may write the real target, atomically.

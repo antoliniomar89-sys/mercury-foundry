@@ -601,7 +601,7 @@ def test_provider_call_metadata_persists_when_real_provider_blocks_task(tmp_path
     workspace = Workspace(tmp_path / "target_project")
     builder = Builder(provider, workspace)
     evaluator = Evaluator(TestRunner(workspace.root))
-    execution_loop = ExecutionLoop(conn, builder, evaluator)
+    execution_loop = ExecutionLoop(conn, builder, evaluator, staging_base_dir=tmp_path / "mf_staging")
     orchestrator = Orchestrator(conn, provider, execution_loop)
 
     # La pianificazione stessa userebbe il provider reale e fallirebbe: verifichiamo
@@ -647,7 +647,7 @@ def test_successful_planning_call_is_persisted_in_provider_calls(tmp_path):
     workspace = Workspace(tmp_path / "target_project")
     builder = Builder(provider, workspace)
     evaluator = Evaluator(TestRunner(workspace.root))
-    execution_loop = ExecutionLoop(conn, builder, evaluator)
+    execution_loop = ExecutionLoop(conn, builder, evaluator, staging_base_dir=tmp_path / "mf_staging")
     orchestrator = Orchestrator(conn, provider, execution_loop)
 
     goal_id = orchestrator.submit_goal("aggiungi una capability qualsiasi")

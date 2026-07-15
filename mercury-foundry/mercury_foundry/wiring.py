@@ -34,14 +34,26 @@ def build_foundry(
     db_path: Path | str | None = None,
     sandbox_root: Path | str | None = None,
     provider_name: str | None = None,
+    staging_base_dir: Path | str | None = None,
 ) -> Foundry:
     conn = db.connect(db_path)
     ai_provider = get_provider(provider_name)
     workspace = Workspace(Path(sandbox_root) if sandbox_root is not None else config.TARGET_PROJECT_DIR)
 
+    if staging_base_dir is not None:
+        resolved_staging_base_dir = Path(staging_base_dir)
+    elif sandbox_root is not None:
+        # Un `sandbox_root` custom indica quasi sempre un target isolato (es.
+        # `tmp_path` nei test): lo staging va co-locato accanto ad esso,
+        # invece che nella cartella condivisa `config.STAGING_BASE_DIR` del
+        # progetto reale, per non far trapelare stato tra run/test diversi.
+        resolved_staging_base_dir = Path(sandbox_root).resolve().parent / "mf_staging"
+    else:
+        resolved_staging_base_dir = config.STAGING_BASE_DIR
+
     builder = Builder(ai_provider, workspace)
     evaluator = Evaluator(TestRunner(workspace.root))
-    execution_loop = ExecutionLoop(conn, builder, evaluator)
+    execution_loop = ExecutionLoop(conn, builder, evaluator, staging_base_dir=resolved_staging_base_dir)
     orchestrator = Orchestrator(conn, ai_provider, execution_loop)
 
     return Foundry(conn=conn, ai_provider=ai_provider, workspace=workspace, orchestrator=orchestrator)

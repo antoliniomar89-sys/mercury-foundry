@@ -1,0 +1,293 @@
+CODICE OPERAZIONE: MF-FIX-004
+NOME: Candidate staging, rollback completo e isolamento sicuro dell’esecuzione
+
+Non effettuare chiamate reali al provider.
+Non approvare o promuovere candidati esistenti.
+Non eseguire MF-RUN-003.
+Non modificare manualmente il contenuto finale del probe.
+
+CONTESTO
+
+L’audit generale ha individuato tre criticità bloccanti:
+
+1. BUILD e TEST modificano direttamente target_project prima dell’approvazione umana.
+2. Il rollback copre soltanto errori durante la scrittura, non l’intero tentativo BUILD → TEST → VERIFY.
+3. I test generati vengono eseguiti ereditando potenzialmente secret e variabili sensibili dell’ambiente Replit.
+
+OBIETTIVO
+
+Trasformare ogni attempt in una transazione isolata:
+
+TARGET IMMUTABILE
+→ STAGING DEL TENTATIVO
+→ BUILD
+→ TEST
+→ VERIFY
+→ CANDIDATE PENDING_REVIEW
+→ APPROVE: PROMOZIONE ATOMICA
+oppure
+→ REJECT/FAILURE: ELIMINAZIONE STAGING
+
+Il vero target_project non deve essere modificato prima dell’approvazione umana.
+
+REQUISITI ARCHITETTURALI
+
+1. STAGING PER RUN E ATTEMPT
+
+Crea una workspace di staging distinta per ogni tentativo, identificata almeno da:
+
+- run_id;
+- attempt_id;
+- candidate_id quando disponibile.
+
+La staging deve essere fisicamente separata dal vero target_project.
+
+2. INIZIALIZZAZIONE DELLA STAGING
+
+All’inizio del tentativo:
+
+- crea uno snapshot coerente del target_project;
+- copia o materializza lo snapshot nella staging;
+- BUILD, TEST e VERIFY devono operare esclusivamente nella staging.
+
+Nessuna scrittura del Builder deve raggiungere direttamente target_project.
+
+3. TRANSAZIONE COMPLETA DEL TENTATIVO
+
+La vera unità transazionale deve essere:
+
+SNAPSHOT
+→ BUILD ATOMICO
+→ TEST
+→ VERIFY
+→ CREAZIONE CANDIDATE
+
+Se qualunque fase fallisce:
+
+- lo staging viene invalidato;
+- nessuna modifica raggiunge target_project;
+- nessuna candidate promuovibile viene creata;
+- audit e stato del tentativo registrano il fallimento;
+- non rimangono file parziali nel target reale.
+
+4. CANDIDATE PENDING_REVIEW
+
+Quando TEST e VERIFY passano:
+
+- crea la candidate in stato pending_review;
+- conserva il riferimento immutabile allo staging o a un artifact/snapshot equivalente;
+- registra il manifest completo delle differenze rispetto al target originale;
+- non applicare ancora le modifiche a target_project.
+
+5. APPROVAZIONE UMANA
+
+approve_candidate deve essere l’unico percorso capace di modificare target_project.
+
+L’approvazione deve:
+
+- verificare che la candidate sia ancora pending_review;
+- verificare che il target non sia cambiato rispetto allo snapshot di partenza;
+- promuovere atomicamente la candidate;
+- usare rollback se la promozione fallisce;
+- aggiornare lo stato ad approved solo dopo una promozione riuscita;
+- registrare audit completo.
+
+6. RIFIUTO
+
+reject_candidate deve:
+
+- cambiare lo stato in rejected;
+- eliminare o invalidare lo staging associato;
+- non modificare target_project;
+- registrare audit completo.
+
+7. CONFLITTO O TARGET MODIFICATO
+
+Se target_project è cambiato dopo la creazione della candidate:
+
+- non promuovere automaticamente;
+- bloccare in modalità fail-closed;
+- registrare un conflitto;
+- richiedere una nuova candidate o una decisione umana esplicita.
+
+8. MANIFEST DELLA CANDIDATE
+
+Ogni candidate deve conservare almeno:
+
+- run_id;
+- attempt_id;
+- provider_name;
+- model;
+- is_simulated;
+- snapshot/hash del target iniziale;
+- staging reference;
+- file creati;
+- file modificati;
+- file eliminati;
+- hash e dimensione dei file finali;
+- risultato TEST;
+- risultato VERIFY;
+- literal constraints applicati;
+- provider calls associate;
+- token e costo;
+- timestamp.
+
+9. PROVIDER CALLS E AUDIT IMMUTABILI
+
+Non modificare retroattivamente record provider_calls già scritti.
+
+Se serve associare chiamate e candidate:
+
+- crea una tabella relazionale append-only, per esempio candidate_provider_calls;
+- oppure usa un meccanismo equivalente immutabile.
+
+Ogni chiamata reale o simulata deve essere registrata una sola volta.
+
+10. REQUIRED FILES
+
+Correggi il contratto dei literal constraints affinché:
+
+- required_files indichi i file obbligatori;
+- allowed_files indichi soltanto i file consentiti;
+- forbidden_extra_files impedisca file persistenti aggiuntivi;
+- la build completeness richieda tutti i required_files prima di TEST.
+
+Aggiorna probe_constraints.json inserendo esplicitamente:
+
+- MERCURY_FOUNDRY_PROBE.md;
+- test_mercury_foundry_probe.py;
+
+come required_files.
+
+11. AMBIENTE TEST SANITIZZATO
+
+Il TestRunner non deve ereditare integralmente os.environ.
+
+Costruisci l’ambiente tramite allowlist minima.
+
+Deve rimuovere esplicitamente almeno:
+
+- OPENAI_API_KEY;
+- SESSION_SECRET;
+- chiavi, token e password;
+- variabili Replit sensibili;
+- qualunque variabile identificata come secret.
+
+Non stampare mai i valori rimossi.
+
+Mantieni soltanto le variabili tecniche necessarie, per esempio:
+
+- PATH controllato;
+- HOME temporanea;
+- TMPDIR temporanea;
+- PYTHONPATH necessario;
+- PYTHONDONTWRITEBYTECODE;
+- variabili esplicitamente autorizzate.
+
+12. OUTPUT TEST REDATTO
+
+Prima di salvare stdout/stderr nel database o nell’audit:
+
+- applica redazione dei secret;
+- limita dimensione e lunghezza;
+- registra eventuale troncamento;
+- non persistere valori sensibili.
+
+13. RETE E COMANDI
+
+Quando tecnicamente possibile:
+
+- esegui BUILD e TEST senza accesso di rete;
+- limita i comandi eseguibili tramite allowlist;
+- non usare shell=True;
+- blocca comandi non consentiti in modalità fail-closed.
+
+Se l’isolamento di rete non è realizzabile nell’ambiente corrente, documenta chiaramente il limite e non dichiararlo implementato.
+
+14. CLEANUP
+
+Definisci una policy chiara:
+
+- failure: staging eliminato o quarantinato per audit;
+- rejection: staging eliminato;
+- approval: staging eliminato dopo promozione riuscita;
+- candidate scaduta: cleanup controllato;
+- nessun cleanup deve toccare target_project.
+
+15. NON AGGIUNGERE LOGICA SPECIFICA DEL PROBE
+
+La soluzione deve essere generale e applicabile a qualunque progetto target.
+
+TEST OBBLIGATORI
+
+Aggiungi test mockati almeno per:
+
+1. BUILD modifica solo staging, mai target_project.
+2. TEST fallito lascia target_project byte-identico.
+3. VERIFY fallito lascia target_project byte-identico.
+4. Budget o attempt limit raggiunto lascia target_project immutato.
+5. Candidate pending_review non modifica il target.
+6. Approve promuove atomicamente la candidate.
+7. Errore durante approve esegue rollback.
+8. Reject elimina staging senza modificare il target.
+9. Target modificato dopo la candidate causa conflitto fail-closed.
+10. Due candidate concorrenti non possono sovrascriversi silenziosamente.
+11. Manifest delle differenze completo e verificabile.
+12. required_files distinti da allowed_files.
+13. TEST non parte finché tutti i required_files non sono presenti.
+14. Ambiente test privo di OPENAI_API_KEY e SESSION_SECRET.
+15. Output test contenente un secret viene redatto.
+16. Nessuna associazione retroattiva tramite UPDATE di provider_calls.
+17. Associazione append-only candidate-provider-calls.
+18. Candidate rifiutata non produce alcuna modifica persistente.
+19. End-to-end mockato:
+
+SPEC
+→ PLAN
+→ BUILD IN STAGING
+→ TEST
+→ VERIFY
+→ CANDIDATE PENDING_REVIEW
+
+con target reale immutato.
+
+20. End-to-end mockato di approvazione:
+
+PENDING_REVIEW
+→ APPROVE
+→ PROMOZIONE ATOMICA
+→ APPROVED
+
+21. Regressione completa della suite esistente.
+
+VERIFICA FINALE
+
+Dopo l’implementazione:
+
+1. Esegui tutta la suite di test.
+2. Non effettuare chiamate reali.
+3. Non eseguire MF-RUN-003.
+4. Non approvare candidate reali precedenti.
+5. Riporta:
+
+- numero totale dei test;
+- file modificati;
+- migrazioni database aggiunte;
+- struttura dello staging;
+- lifecycle completo della candidate;
+- modalità di snapshot e confronto del target;
+- algoritmo di promozione atomica;
+- comportamento di rollback;
+- ambiente consentito al TestRunner;
+- variabili sensibili rimosse;
+- limite reale sull’isolamento di rete;
+- struttura del manifest;
+- struttura append-only delle associazioni provider/candidate;
+- stato attuale di target_project;
+- stato dei candidati precedenti;
+- conferma che una candidate pending_review non modifica più il target;
+- comando previsto per il successivo audit;
+- comando previsto per MF-RUN-003, senza eseguirlo.
+
+Non fare modifiche non correlate.
+Non dichiarare implementata una protezione che non sia verificata dai test.
