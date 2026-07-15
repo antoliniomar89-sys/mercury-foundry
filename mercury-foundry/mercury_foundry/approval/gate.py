@@ -373,6 +373,132 @@ def _commit_approval(
     conn.commit()
 
 
+class ApprovalRevokeConflictError(ValueError):
+    """Il target non corrisponde esattamente ai file promossi dalla candidate:
+    operazione compensativa bloccata fail-closed, nessuna rimozione effettuata."""
+
+
+def revoke_approval_incident(
+    conn: sqlite3.Connection,
+    candidate_id: int,
+    rationale: str,
+    *,
+    target_root: Path | None = None,
+) -> None:
+    """Operazione compensativa auditabile per una promozione involontaria (MF-INCIDENT-001).
+
+    Rimuove ESCLUSIVAMENTE i file che il manifest della candidate attesta come
+    promossi nel target, dopo aver verificato byte per byte che coincidano.
+    Non modifica né cancella la decisione `approve` o l'audit `CANDIDATE_APPROVED`
+    originali: la storia è immutabile. Registra una nuova decisione
+    `approval_revoke_incident` e un audit `CANDIDATE_APPROVAL_REVOKED_INCIDENT`.
+
+    Fail-closed: se QUALSIASI file del manifest non coincide con il target
+    (hash o dimensione diversi, o file mancante), l'operazione si ferma senza
+    rimuovere nulla.
+    """
+    import hashlib
+
+    candidate = models.get_candidate(conn, candidate_id)
+    if candidate is None:
+        raise CandidateNotFoundError(f"Candidate {candidate_id} non trovata")
+
+    status = candidate["status"]
+    if status != "approved":
+        raise InvalidCandidateStateError(
+            f"Candidate {candidate_id} è in stato '{status}', non 'approved': "
+            "revoke_approval_incident si applica solo a candidate approvate."
+        )
+
+    manifest = json.loads(candidate["manifest_json"]) if candidate["manifest_json"] else {}
+    final_hashes: dict = manifest.get("files", {}).get("final_hashes", {})
+    final_sizes: dict = manifest.get("files", {}).get("final_sizes", {})
+    promoted_files: list[str] = (
+        list(manifest.get("files", {}).get("created", []))
+        + list(manifest.get("files", {}).get("modified", []))
+    )
+
+    resolved_target_root = _resolve_target_root(candidate, manifest, target_root)
+    if resolved_target_root is None:
+        raise InvalidCandidateStateError(
+            f"Candidate {candidate_id}: target_root non determinabile dal manifest."
+        )
+
+    # Verifica byte-per-byte che OGNI file promosso coincida. Fail-closed su
+    # qualsiasi discrepanza — nessuna rimozione avviene prima della verifica completa.
+    mismatches: list[str] = []
+    for rel_path in promoted_files:
+        target_file = resolved_target_root / rel_path
+        if not target_file.exists():
+            mismatches.append(f"{rel_path}: mancante nel target")
+            continue
+        content = target_file.read_bytes()
+        actual_hash = hashlib.sha256(content).hexdigest()
+        actual_size = len(content)
+        expected_hash = final_hashes.get(rel_path)
+        expected_size = final_sizes.get(rel_path)
+        if actual_hash != expected_hash:
+            mismatches.append(
+                f"{rel_path}: hash atteso {expected_hash!r}, trovato {actual_hash!r}"
+            )
+        elif expected_size is not None and actual_size != expected_size:
+            mismatches.append(
+                f"{rel_path}: dimensione attesa {expected_size}, trovata {actual_size}"
+            )
+
+    if mismatches:
+        log_action(
+            conn,
+            entity_type="candidate",
+            entity_id=candidate_id,
+            action="CANDIDATE_APPROVAL_REVOKE_BLOCKED_MISMATCH",
+            actor="human",
+            payload={"mismatches": mismatches, "rationale": rationale},
+        )
+        raise ApprovalRevokeConflictError(
+            f"Candidate {candidate_id}: il target non coincide con il manifest della candidate — "
+            f"operazione compensativa bloccata fail-closed. Discrepanze: {mismatches}"
+        )
+
+    # Verifica superata: rimuovi SOLO i file promossi, nell'ordine del manifest.
+    hashes_before = {
+        rel: {"hash": final_hashes[rel], "size": final_sizes.get(rel)}
+        for rel in promoted_files
+    }
+    for rel_path in promoted_files:
+        (resolved_target_root / rel_path).unlink()
+
+    # Aggiorna stato candidate e registra decisione + audit nella stessa transazione.
+    models.update_candidate_status_no_commit(conn, candidate_id, "approval_revoked")
+    models.create_decision_no_commit(
+        conn,
+        task_id=candidate["task_id"],
+        candidate_id=candidate_id,
+        decision_type="approval_revoke_incident",
+        actor="human",
+        rationale=rationale,
+    )
+    log_action(
+        conn,
+        entity_type="candidate",
+        entity_id=candidate_id,
+        action="CANDIDATE_APPROVAL_REVOKED_INCIDENT",
+        actor="human",
+        payload={
+            "rationale": rationale,
+            "run_id": candidate["run_id"],
+            "candidate_id": candidate_id,
+            "files_removed": promoted_files,
+            "hashes_before": hashes_before,
+            "target_root": str(resolved_target_root),
+            "original_approve_decision_preserved": True,
+            "original_audit_preserved": True,
+        },
+        commit=False,
+    )
+    conn.commit()
+
+
 def reject_candidate(conn: sqlite3.Connection, candidate_id: int, rationale: str | None = None) -> None:
     """Rifiuta una candidate. Non tocca MAI il target reale. Idempotente:
     una seconda chiamata su una candidate già `rejected` è un no-op (nessuna

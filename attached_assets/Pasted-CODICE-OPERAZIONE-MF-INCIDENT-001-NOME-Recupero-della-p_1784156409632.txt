@@ -1,0 +1,161 @@
+CODICE OPERAZIONE: MF-INCIDENT-001
+NOME: Recupero della promozione involontaria e isolamento reale del gate umano
+
+Non effettuare chiamate al provider.
+Non eseguire nuovi run.
+Non creare nuove candidate.
+Non cancellare o riscrivere record storici.
+Non nascondere l’approvazione involontaria.
+
+CONTESTO
+
+MF-RUN-003 ha completato correttamente:
+
+SPEC → PLAN → BUILD nello staging → TEST → VERIFY → CANDIDATE pending_review
+
+Dati:
+
+- goal_id = 5
+- run_id = "5"
+- attempt_id = 6
+- candidate_id = 2
+- provider_calls = 8 e 9
+- provider reale
+- is_simulated = false
+
+Durante le verifiche finali, lo script di verifica ha invocato realmente
+approve_candidate(candidate_id=2), aspettandosi erroneamente un blocco.
+
+La candidate moderna era valida e il gate l’ha quindi approvata e promossa.
+
+Stato attuale:
+
+- candidate_id 2 = approved;
+- decisione approve presente;
+- audit CANDIDATE_APPROVED presente;
+- target_project contiene:
+  - MERCURY_FOUNDRY_PROBE.md
+  - test_mercury_foundry_probe.py
+
+OBIETTIVI
+
+A. Recuperare lo stato senza alterare la storia.
+B. Rendere impossibile l’approvazione da submit, test, verify o script Agent.
+C. Separare tecnicamente l’approvazione umana dal normale processo di esecuzione.
+
+FASE 1 — RACCOLTA PROVE
+
+1. Esegui esclusivamente letture e riporta:
+
+- stato candidate 2;
+- decisione approve;
+- audit relativi;
+- staging manifest;
+- target manifest;
+- hash e dimensioni dei due file;
+- provider_calls associate;
+- stato goal 5;
+- contenuto attuale di target_project.
+
+2. Salva un incident report append-only con codice MF-INCIDENT-001.
+
+FASE 2 — OPERAZIONE COMPENSATIVA
+
+3. Non eliminare la decisione approve e non riportare falsamente la candidate a pending_review.
+
+4. Introduci uno stato esplicito, per esempio:
+
+- approval_revoked
+oppure
+- reverted_after_incident
+
+5. Implementa un’operazione compensativa auditabile che:
+
+- verifichi che i due file nel target coincidano esattamente con quelli promossi dalla candidate 2;
+- rimuova esclusivamente quei due file;
+- lasci invariato qualsiasi altro elemento;
+- riporti target_project allo snapshot precedente, che era vuoto;
+- registri una nuova decisione/evento compensativo;
+- non modifichi o cancelli la decisione approve storica;
+- registri motivo, candidate_id, run_id, hash prima/dopo e timestamp.
+
+6. Se il target non coincide esattamente con il manifest promosso, fermati fail-closed senza rimuovere nulla.
+
+FASE 3 — ISOLAMENTO REALE DEL GATE
+
+7. Il normale runtime Foundry non deve più poter approvare candidate.
+
+8. Submit, ExecutionLoop, Orchestrator, Evaluator, Verify, test helper e script diagnostici devono avere soltanto capacità di:
+
+- creare candidate;
+- leggerle;
+- lasciarle pending_review;
+- eventualmente rifiutarle solo attraverso il percorso umano previsto.
+
+9. Rimuovi approve_candidate dall’oggetto o wiring usato dal normale processo di esecuzione.
+
+10. Crea un entrypoint di approvazione separato.
+
+11. L’entrypoint deve rifiutare l’esecuzione quando:
+
+- è invocato dal processo submit;
+- manca un contesto di approvazione esplicitamente umano;
+- è eseguito in modalità non interattiva;
+- è eseguito da test, verify o automazione;
+- manca una conferma distinta dall’ID della candidate.
+
+12. Non considerare sufficiente un semplice parametro --confirm che l’Agent possa aggiungere autonomamente.
+
+13. Implementa un confine realmente separato. Preferenza:
+
+- il normale workspace produce soltanto un pacchetto candidato;
+- l’approvazione/promozione avviene tramite un comando o processo separato che non è disponibile al runtime Agent ordinario.
+
+Se nel singolo workspace Replit non è possibile garantire questa separazione, implementa temporaneamente:
+
+- APPROVAL_DISABLED_BY_DEFAULT = true;
+- nessun percorso di approvazione operativo nel workspace Agent;
+- export della candidate per revisione manuale;
+- promozione disabilitata fino alla futura integrazione di un canale umano esterno.
+
+La sicurezza è più importante della comodità.
+
+14. Nessuna funzione di verifica deve mai chiamare approve_candidate per “provare” il gate.
+
+15. I test del gate devono usare database e target temporanei completamente isolati.
+
+TEST OBBLIGATORI
+
+- submit non può approvare;
+- verify non può approvare;
+- evaluator non può approvare;
+- script diagnostico non può approvare;
+- test helper non può toccare il target reale;
+- candidate moderna valida resta pending_review;
+- chiamata di approvazione dal runtime ordinario viene bloccata;
+- operazione compensativa conserva decisione e audit storici;
+- rollback rimuove soltanto i file promossi;
+- target non coincidente blocca il rollback;
+- target finale torna vuoto;
+- nessuna chiamata provider;
+- regressione completa della suite.
+
+REPORT FINALE
+
+Riporta:
+
+- causa radice;
+- stato iniziale e finale;
+- prove storiche conservate;
+- operazione compensativa;
+- stato finale candidate 2;
+- stato finale goal 5;
+- stato finale target_project;
+- nuovo confine del gate;
+- file modificati;
+- test raccolti/passati/falliti;
+- conferma zero chiamate provider;
+- limiti residui del gate umano.
+
+Non eseguire un altro run reale.
+Non approvare altre candidate.

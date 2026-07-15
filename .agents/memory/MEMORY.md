@@ -8,3 +8,4 @@
 - [Atomic BUILD aggregation and build-completeness gate](atomic-build-aggregation.md) — multi-step plans must aggregate into one atomic BUILD before TEST; fail-closed completeness gate blocks partial builds without consuming a retry.
 - [Mercury Foundry candidate staging & atomic promotion](mercury-foundry-candidate-staging.md) — BUILD/TEST/VERIFY run against an isolated staging copy; only the approval gate may write the real target, atomically.
 - [Mercury Foundry integrity + coherent approval](mercury-foundry-integrity-and-coherent-approval.md) — staging manifest diff at approval time, backup/restore around promotion, `recovery_required` terminal state, run_id-based spend accounting.
+- [Mercury Foundry gate isolation & incident revoke](mercury-foundry-gate-isolation.md) — human_gate.py is the only public approval path; gate.approve_candidate stays for test business-logic; revoke_approval_incident is the compensative op for accidental promotions.

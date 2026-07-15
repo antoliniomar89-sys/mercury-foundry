@@ -18,6 +18,7 @@ from pathlib import Path
 from mercury_foundry.ai.errors import ProviderExecutionError
 from mercury_foundry.ai.provider_factory import ProviderUnavailableError, get_provider
 from mercury_foundry.approval import gate
+from mercury_foundry.approval.human_gate import HumanApprovalToken, RuntimeApprovalBlockedError, approve_candidate as human_approve_candidate
 from mercury_foundry.audit.logger import list_audit_log
 from mercury_foundry.diagnostics import run_doctor
 from mercury_foundry.policy.literal_constraints import LiteralConstraints
@@ -164,7 +165,23 @@ def cmd_approve(args: argparse.Namespace) -> int:
             f"ATTENZIONE: la candidate {args.candidate_id} è stata generata dal provider "
             f"SIMULATO '{candidate['provider_name']}' — non è codice scritto da un'AI reale."
         )
-    gate.approve_candidate(foundry.conn, args.candidate_id, rationale=args.reason)
+
+    expected_confirmation = f"APPROVE-{args.candidate_id}-CONFIRMED"
+    if not args.confirm_id:
+        print(
+            f"[approve] Per approvare la candidate {args.candidate_id}, ripetere il comando "
+            f"con --confirm-id {expected_confirmation!r}. Questo conferma che stai approvando "
+            "consapevolmente questa specifica candidate e non un'altra."
+        )
+        return 1
+
+    try:
+        token = HumanApprovalToken(args.confirm_id)
+        human_approve_candidate(foundry.conn, args.candidate_id, rationale=args.reason, token=token)
+    except RuntimeApprovalBlockedError as exc:
+        print(f"[approve] BLOCCATO: {exc}")
+        return 1
+
     print(f"[candidate {args.candidate_id}] approvata da umano. rationale={args.reason!r}")
     return 0
 
@@ -235,9 +252,21 @@ def build_parser() -> argparse.ArgumentParser:
     p_status.add_argument("--goal", type=int, default=None, help="id del goal da mostrare (default: tutti)")
     p_status.set_defaults(func=cmd_status)
 
-    p_approve = subparsers.add_parser("approve", help="approva una candidate (azione umana)")
+    p_approve = subparsers.add_parser("approve", help="approva una candidate (azione umana esplicita)")
     p_approve.add_argument("candidate_id", type=int)
     p_approve.add_argument("--reason", default=None)
+    p_approve.add_argument(
+        "--confirm-id",
+        default=None,
+        dest="confirm_id",
+        metavar="APPROVE-N-CONFIRMED",
+        help=(
+            "Stringa di conferma esplicita obbligatoria: deve essere esattamente "
+            "'APPROVE-{candidate_id}-CONFIRMED'. Impedisce approvazioni accidentali "
+            "o automatizzate — un agente non può aggiungere questo flag senza conoscere "
+            "l'ID specifico della candidate che intende approvare."
+        ),
+    )
     p_approve.set_defaults(func=cmd_approve)
 
     p_reject = subparsers.add_parser("reject", help="rifiuta una candidate (azione umana)")

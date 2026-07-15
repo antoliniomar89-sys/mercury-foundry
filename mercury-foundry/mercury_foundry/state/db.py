@@ -26,6 +26,7 @@ def init_schema(conn: sqlite3.Connection) -> None:
     _migrate_provider_calls_columns(conn)
     _migrate_goals_columns(conn)
     _migrate_candidates_columns(conn)
+    _migrate_candidates_approval_revoked(conn)
 
 
 def _migrate_provider_calls_columns(conn: sqlite3.Connection) -> None:
@@ -63,6 +64,22 @@ def _migrate_goals_columns(conn: sqlite3.Connection) -> None:
     existing_columns = {row["name"] for row in conn.execute("PRAGMA table_info(goals)").fetchall()}
     if "literal_constraints_json" not in existing_columns:
         conn.execute("ALTER TABLE goals ADD COLUMN literal_constraints_json TEXT")
+    conn.commit()
+
+
+def _migrate_candidates_approval_revoked(conn: sqlite3.Connection) -> None:
+    """Migrazione idempotente: nessuna modifica di schema reale necessaria per
+    `approval_revoked` (SQLite usa TEXT libero per i campi status), ma registra
+    nel commento del codice che `approval_revoked` è uno stato valido dal punto
+    di vista della Foundry (MF-INCIDENT-001). Questa funzione esegue un CHECK
+    di consistenza leggero: verifica che la tabella `decisions` contenga la
+    colonna `decision_type` (dove viene registrata `approval_revoke_incident`)."""
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(decisions)").fetchall()}
+    if "decision_type" not in cols:
+        raise RuntimeError(
+            "Schema decisions mancante di 'decision_type': impossibile registrare "
+            "decisioni di tipo 'approval_revoke_incident'."
+        )
     conn.commit()
 
 
