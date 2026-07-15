@@ -1,0 +1,100 @@
+CODICE OPERAZIONE: MF-PREP-003
+NOME: Chiusura controllata dello stato legacy e preparazione di MF-RUN-003
+
+Non effettuare chiamate reali al provider.
+Non eseguire MF-RUN-003.
+Non approvare alcuna candidate.
+Non modificare il codice sorgente della Foundry salvo un errore reale e documentato.
+
+CONTESTO
+
+La candidate legacy preesistente:
+
+- è ancora pending_review;
+- ha campi staging NULL;
+- non è più approvabile dopo MF-FIX-006;
+- può essere rifiutata manualmente;
+- il target_project contiene ancora il file storico
+  MERCURY_FOUNDRY_PROBE.md
+  lasciato dal vecchio workflow che scriveva direttamente nel target.
+
+OBIETTIVO
+
+Chiudere in modo esplicito e auditabile lo stato legacy e preparare un target pulito per MF-RUN-003.
+
+PROCESSO
+
+1. Esegui la suite completa dei test e riporta il numero esatto:
+   - test raccolti;
+   - test passati;
+   - test falliti;
+   - test saltati.
+
+2. Verifica la candidate legacy esistente e riporta:
+   - candidate_id;
+   - goal_id/run_id;
+   - stato;
+   - staging_root;
+   - target_snapshot_hash;
+   - target_root;
+   - presenza o assenza dei manifest.
+
+3. Dimostra, senza modificare il target, che un tentativo di approvazione viene bloccato da:
+   LegacyCandidateNotPromotableError.
+
+4. Verifica che:
+   - nessuna decisione approve sia stata creata;
+   - nessuna promozione sia avvenuta;
+   - target_project sia rimasto invariato;
+   - l’evento di blocco sia presente nell’audit.
+
+5. Rifiuta esplicitamente la candidate legacy tramite il percorso ufficiale reject_candidate.
+
+6. Verifica dopo il rifiuto:
+   - stato candidate = rejected;
+   - nessuna modifica a target_project causata dal reject;
+   - decisione reject presente una sola volta;
+   - audit presente;
+   - la candidate non sia più approvabile.
+
+7. Dopo aver documentato che il file residuo non è attribuibile in modo sicuro a una candidate moderna, elimina manualmente e deterministicamente esclusivamente:
+
+   target_project/MERCURY_FOUNDRY_PROBE.md
+
+8. Non eliminare nessun altro file o directory.
+
+9. Verifica che target_project sia completamente vuoto.
+   Se contiene qualsiasi altro elemento, fermati e riportalo senza eliminarlo.
+
+10. Verifica probe_constraints.json e conferma che includa esplicitamente:
+
+   required_files:
+   - MERCURY_FOUNDRY_PROBE.md
+   - test_mercury_foundry_probe.py
+
+   allowed_files:
+   - MERCURY_FOUNDRY_PROBE.md
+   - test_mercury_foundry_probe.py
+
+   forbidden_extra_files: true
+   byte_exact_required: true
+
+11. Non modificare probe_constraints.json se è già corretto.
+12. Non effettuare chiamate reali.
+13. Non eseguire MF-RUN-003.
+
+REPORT FINALE
+
+Riporta:
+
+- codice operazione MF-PREP-003;
+- numero esatto della suite di test;
+- stato iniziale e finale della candidate legacy;
+- prova del blocco dell’approvazione;
+- decisione di rifiuto;
+- audit del blocco e del rifiuto;
+- file eliminato dal target;
+- stato finale di target_project;
+- validazione di probe_constraints.json;
+- conferma di zero chiamate provider;
+- comando esatto previsto per MF-RUN-003, senza eseguirlo.

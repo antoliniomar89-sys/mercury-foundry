@@ -73,3 +73,21 @@ records an explicit "not promotable" terminal error instead of a silent
 alternate path; they should remain inspectable/rejectable, just never
 auto-migrated or promoted retroactively from whatever happens to sit in the
 target now (that data was never attributed to the record in the first place).
+
+## Closing out a legacy record once its own guarantees make it inert
+Once a record's error type proves it can never be promoted, the correct
+close-out is: demonstrate the block once more for the audit trail, reject it
+through the normal reject path (never a special-case deletion of the DB
+row), and only then physically clean up whatever orphaned artifact it left
+behind in the shared resource — and only that specific artifact, never a
+broader sweep, since nothing guarantees other leftover files belong to the
+same record.
+
+**Why:** deleting the DB row or the target artifact directly (instead of
+going through `reject_candidate`) would leave no audit trail and would
+assume attribution the system explicitly does not track for legacy records.
+
+**How to apply:** close-out order is verify-block → reject via the real API
+→ inspect target for anything unattributable → remove only the exact
+known-orphaned path → re-verify the shared resource is empty (or report
+unexpected leftovers without deleting them).
