@@ -1,14 +1,15 @@
 # MERCURY FOUNDRY PROBE
 
-This document serves as a probe for the Mercury Foundry project. It outlines key features, usage, and guidelines for developers.
+Questo file contiene informazioni sull'uso e la configurazione della MERCURY FOUNDRY PROBE. Seguire le istruzioni per l'installazione e la gestione della probe.
 
-## Features
-- Fast build times
-- Easy integration with CI/CD pipelines
+## Installazione
 
-## Usage
-To use Mercury Foundry, simply clone the repository and follow the installation instructions in the README.
+1. Clonare il repository.
+2. Eseguire `pip install -r requirements.txt`.
 
-## Guidelines
-- Ensure all code follows the project's coding standards.
-- Write unit tests for new features.
+## Uso
+
+- Esempio di comando per avviare la probe:
+```bash
+python probe.py --config config.json
+```
