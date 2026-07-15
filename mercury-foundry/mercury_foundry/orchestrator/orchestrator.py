@@ -28,6 +28,12 @@ class Orchestrator:
 
     def submit_goal(self, description: str) -> int:
         goal_id = models.create_goal(self.conn, description)
+        # Un goal sottomesso è, in questo sistema, un "run" del Foundry: PLAN
+        # (qui) e BUILD (in ExecutionLoop, sullo stesso goal) condividono lo
+        # stesso run_id, così ogni chiamata reale del provider durante
+        # l'intero ciclo di vita del goal è riconducibile a un unico run in
+        # `provider_calls`.
+        run_id = str(goal_id)
         log_action(
             self.conn,
             entity_type="goal",
@@ -40,24 +46,12 @@ class Orchestrator:
         try:
             task_descriptions = decompose_goal(description, self.ai_provider)
         except ProviderExecutionError as exc:
-            record = self.ai_provider.last_call_record
-            if record is not None:
-                models.create_provider_call(
-                    self.conn,
-                    goal_id=goal_id,
-                    task_id=None,
-                    attempt_id=None,
-                    provider_name=record.provider_name,
-                    model=record.model,
-                    is_simulated=record.is_simulated,
-                    call_number=record.call_number,
-                    requested_at=record.requested_at,
-                    responded_at=record.responded_at,
-                    success=record.success,
-                    usage=record.usage,
-                    estimated_cost_usd=record.estimated_cost_usd,
-                    error_summary=record.error_summary,
-                )
+            models.persist_provider_call_record(
+                self.conn,
+                run_id=run_id,
+                goal_id=goal_id,
+                record=self.ai_provider.last_call_record,
+            )
             log_action(
                 self.conn,
                 entity_type="goal",
@@ -81,6 +75,17 @@ class Orchestrator:
                 payload={"reason": "provider_execution_error_during_plan", "error_type": type(exc).__name__},
             )
             raise
+
+        # Chiamata di pianificazione RIUSCITA: va persistita esattamente come
+        # quella fallita sopra, altrimenti l'audit trail di provider_calls
+        # sottostimerebbe la spesa reale ogni volta che il piano riesce al
+        # primo colpo (il gap che questo fix corregge).
+        models.persist_provider_call_record(
+            self.conn,
+            run_id=run_id,
+            goal_id=goal_id,
+            record=self.ai_provider.last_call_record,
+        )
 
         for index, task_description in enumerate(task_descriptions):
             task_id = models.create_task(

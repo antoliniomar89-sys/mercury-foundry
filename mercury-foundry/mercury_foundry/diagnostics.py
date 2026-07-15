@@ -24,6 +24,7 @@ from mercury_foundry.ai.provider_factory import (
     resolve_provider_name,
 )
 from mercury_foundry.sandbox.workspace import SandboxViolation, Workspace
+from mercury_foundry.state.db import init_schema
 
 MIN_PYTHON = (3, 10)
 
@@ -147,9 +148,12 @@ def _check_database(report: DoctorReport, db_path: Path | str | None) -> None:
         conn = sqlite3.connect(str(path))
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys = ON;")
-        schema_sql = config.SCHEMA_PATH.read_text()
-        conn.executescript(schema_sql)
-        conn.commit()
+        # Riusa lo stesso init (schema + migrazioni idempotenti, es. le colonne
+        # run_id/operation di provider_calls) usato da `state.db.connect`,
+        # invece di duplicare qui solo l'executescript: altrimenti un DB
+        # esistente pre-migrazione risulterebbe "valido" per doctor ma rotto
+        # per il resto dell'app (schema desincronizzato tra i due percorsi).
+        init_schema(conn)
 
         existing_tables = {
             row["name"]

@@ -46,6 +46,7 @@ class ProviderCallRecord:
     provider_name: str
     model: str | None
     is_simulated: bool
+    operation: str  # "PLAN" | "PATCH" | "EVALUATION" | "CONNECTIVITY_CHECK" — per l'audit trail persistito
     call_number: int
     requested_at: str
     responded_at: str | None

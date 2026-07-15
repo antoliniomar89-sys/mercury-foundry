@@ -195,16 +195,18 @@ def test_real_provider_end_to_end_workflow_with_structured_mocked_responses(tmp_
     assert candidate["provider_name"] == provider.name
     assert bool(candidate["is_simulated"]) is False
 
-    # Nota: l'Orchestrator persiste in `provider_calls` solo le chiamate di
-    # pianificazione FALLITE (vedi `Orchestrator.submit_goal`) e SEMPRE le
-    # chiamate di build di ogni attempt (successo o fallimento, vedi
-    # `ExecutionLoop._persist_call_record`). Con un piano riuscito al primo
-    # colpo (come qui) risulta quindi persistita solo la chiamata di build:
-    # comportamento preesistente, non modificato da questo task.
+    # Contabilità completa: sia la chiamata di pianificazione RIUSCITA sia
+    # quella di build/patch RIUSCITA sono persistite in `provider_calls`,
+    # ciascuna con il proprio `operation` e collegate allo stesso `run_id`
+    # (== str(goal_id)). Prima del fix di questo task, solo la chiamata di
+    # build veniva registrata quando il piano riusciva al primo colpo.
     calls = models.list_provider_calls_for_goal(conn, goal_id)
-    assert len(calls) == 1
+    assert len(calls) == 2
+    assert all(c["run_id"] == str(goal_id) for c in calls)
     assert all(c["is_simulated"] == 0 for c in calls)
     assert all(c["success"] == 1 for c in calls)
+    assert [c["operation"] for c in calls] == ["PLAN", "PATCH"]
+    assert [c["call_number"] for c in calls] == [1, 2]
     assert FAKE_API_KEY not in json.dumps([dict(c) for c in calls])
 
     audit_rows = list_audit_log(conn)

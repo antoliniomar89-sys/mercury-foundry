@@ -230,12 +230,14 @@ def create_decision(
 def create_provider_call(
     conn: sqlite3.Connection,
     *,
+    run_id: str,
     goal_id: int | None,
     task_id: int | None,
     attempt_id: int | None,
     provider_name: str,
     model: str | None,
     is_simulated: bool,
+    operation: str,
     call_number: int,
     requested_at: str,
     responded_at: str | None,
@@ -245,37 +247,111 @@ def create_provider_call(
     error_summary: str | None,
     candidate_id: int | None = None,
 ) -> int:
-    """Registra UNA invocazione del provider AI. `error_summary` deve arrivare
-    già redatto (nessun segreto/prompt completo) — questo livello non applica
-    ulteriore redazione."""
-    cur = conn.execute(
-        """
-        INSERT INTO provider_calls (
-            goal_id, task_id, attempt_id, candidate_id, provider_name, model, is_simulated,
-            call_number, requested_at, responded_at, success, usage_json, estimated_cost_usd,
-            error_summary, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            goal_id,
-            task_id,
-            attempt_id,
-            candidate_id,
-            provider_name,
-            model,
-            1 if is_simulated else 0,
-            call_number,
-            requested_at,
-            responded_at,
-            1 if success else 0,
-            json.dumps(usage, ensure_ascii=False) if usage is not None else None,
-            estimated_cost_usd,
-            error_summary,
-            _now(),
-        ),
+    """Registra UNA invocazione REALE del provider AI (riuscita o fallita).
+
+    `error_summary` deve arrivare già redatto (nessun segreto/prompt
+    completo) — questo livello non applica ulteriore redazione.
+
+    Idempotente rispetto a (run_id, provider_name, call_number): un secondo
+    tentativo di registrare la STESSA chiamata (stesso run/provider/numero di
+    chiamata) non inserisce una seconda riga, ritorna semplicemente l'id di
+    quella già scritta. Questo garantisce "esattamente un record per chiamata
+    reale" anche se un chiamante (bug, retry, doppio invio) tentasse di
+    persistere lo stesso ProviderCallRecord più di una volta. La tabella resta
+    append-only: qui non si aggiorna né cancella mai una riga esistente.
+    """
+    existing = conn.execute(
+        "SELECT id FROM provider_calls WHERE run_id = ? AND provider_name = ? AND call_number = ?",
+        (run_id, provider_name, call_number),
+    ).fetchone()
+    if existing is not None:
+        return existing["id"]
+
+    try:
+        cur = conn.execute(
+            """
+            INSERT INTO provider_calls (
+                run_id, goal_id, task_id, attempt_id, candidate_id, provider_name, model,
+                is_simulated, operation, call_number, requested_at, responded_at, success,
+                usage_json, estimated_cost_usd, error_summary, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                run_id,
+                goal_id,
+                task_id,
+                attempt_id,
+                candidate_id,
+                provider_name,
+                model,
+                1 if is_simulated else 0,
+                operation,
+                call_number,
+                requested_at,
+                responded_at,
+                1 if success else 0,
+                json.dumps(usage, ensure_ascii=False) if usage is not None else None,
+                estimated_cost_usd,
+                error_summary,
+                _now(),
+            ),
+        )
+        conn.commit()
+        return cur.lastrowid
+    except sqlite3.IntegrityError:
+        # Race benigna contro l'indice univoco idx_provider_calls_dedup: un'altra
+        # chiamata ha scritto la riga tra il SELECT e l'INSERT. Ritorniamo quella
+        # riga invece di propagare l'errore o scriverne una seconda.
+        conn.rollback()
+        row = conn.execute(
+            "SELECT id FROM provider_calls WHERE run_id = ? AND provider_name = ? AND call_number = ?",
+            (run_id, provider_name, call_number),
+        ).fetchone()
+        if row is None:
+            raise
+        return row["id"]
+
+
+def persist_provider_call_record(
+    conn: sqlite3.Connection,
+    *,
+    run_id: str,
+    goal_id: int | None,
+    task_id: int | None = None,
+    attempt_id: int | None = None,
+    candidate_id: int | None = None,
+    record,
+) -> int | None:
+    """Traduce un `ProviderCallRecord` (prodotto da un provider reale) in una
+    riga di `provider_calls`, se il provider ne ha effettivamente prodotto uno.
+
+    Punto UNICO di persistenza usato sia da `Orchestrator` (fase PLAN) sia da
+    `ExecutionLoop` (fase BUILD), così ogni chiamata reale — riuscita o
+    fallita — viene registrata nello stesso modo, con lo stesso `run_id`.
+    I provider simulati (FakeModel) lasciano `record` a `None`: in quel caso
+    non viene scritta alcuna riga (nessuna chiamata è realmente avvenuta).
+    """
+    if record is None:
+        return None
+    return create_provider_call(
+        conn,
+        run_id=run_id,
+        goal_id=goal_id,
+        task_id=task_id,
+        attempt_id=attempt_id,
+        candidate_id=candidate_id,
+        provider_name=record.provider_name,
+        model=record.model,
+        is_simulated=record.is_simulated,
+        operation=record.operation,
+        call_number=record.call_number,
+        requested_at=record.requested_at,
+        responded_at=record.responded_at,
+        success=record.success,
+        usage=record.usage,
+        estimated_cost_usd=record.estimated_cost_usd,
+        error_summary=record.error_summary,
     )
-    conn.commit()
-    return cur.lastrowid
 
 
 def attach_candidate_to_provider_calls(conn: sqlite3.Connection, task_id: int, candidate_id: int) -> None:

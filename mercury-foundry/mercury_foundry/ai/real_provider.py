@@ -125,6 +125,7 @@ class OpenAICompatibleProvider(AIProvider):
                 {"role": "user", "content": goal_description},
             ],
             text_format=PlanSchema,
+            operation="PLAN",
         )
         if not parsed.steps:
             raise ProviderIncompleteResponseError(
@@ -158,6 +159,7 @@ class OpenAICompatibleProvider(AIProvider):
                 },
             ],
             text_format=PatchSchema,
+            operation="PATCH",
         )
 
         max_files = context.get("max_files") if isinstance(context, dict) else None
@@ -188,6 +190,7 @@ class OpenAICompatibleProvider(AIProvider):
         parsed = self._structured_call(
             input_messages=[{"role": "user", "content": prompt}],
             text_format=ConnectivityCheckResult,
+            operation="CONNECTIVITY_CHECK",
         )
         return {"status": parsed.status, "message": parsed.message}
 
@@ -220,6 +223,7 @@ class OpenAICompatibleProvider(AIProvider):
                 },
             ],
             text_format=EvaluationSchema,
+            operation="EVALUATION",
         )
         return {
             "passed": parsed.passed,
@@ -230,7 +234,9 @@ class OpenAICompatibleProvider(AIProvider):
 
     # -- meccanica interna di chiamata, budget e recording -----------------
 
-    def _structured_call(self, *, input_messages: list[dict], text_format: type[SchemaT]) -> SchemaT:
+    def _structured_call(
+        self, *, input_messages: list[dict], text_format: type[SchemaT], operation: str
+    ) -> SchemaT:
         """Esegue UNA chiamata Structured Outputs e ritorna l'output tipizzato/parsato.
 
         Condivisa da `propose_plan`, `propose_patch`, `check_connectivity` e
@@ -239,6 +245,11 @@ class OpenAICompatibleProvider(AIProvider):
         questo adapter. Non fa MAI fallback a parsing di testo libero: se
         `response.output_parsed` è `None`, o il modello rifiuta, o la risposta
         è incompleta/malformata, blocca fail-closed.
+
+        `operation` (es. "PLAN", "PATCH", "EVALUATION", "CONNECTIVITY_CHECK")
+        identifica il tipo di chiamata per l'audit trail persistito in
+        `provider_calls`: viene propagato in OGNI `ProviderCallRecord`
+        prodotto da questa chiamata, riuscita o fallita.
         """
         call_number = self._check_call_budget()
         requested_at = _now()
@@ -252,13 +263,13 @@ class OpenAICompatibleProvider(AIProvider):
             )
         except openai.APITimeoutError as exc:
             message = redact(str(exc), self.config.api_key)
-            self._record_call(call_number, requested_at, success=False, error=message)
+            self._record_call(call_number, requested_at, operation, success=False, error=message)
             raise ProviderTimeoutError(
                 f"Timeout dopo {self.config.timeout_seconds}s in attesa del provider AI (Responses API)."
             ) from exc
         except openai.APIStatusError as exc:
             message = redact(str(exc), self.config.api_key)
-            self._record_call(call_number, requested_at, success=False, error=message)
+            self._record_call(call_number, requested_at, operation, success=False, error=message)
             if _looks_like_unsupported_model(exc, message):
                 raise ProviderUnknownModelError(
                     f"Modello '{self.config.model}' non supportato per gli structured output "
@@ -269,14 +280,14 @@ class OpenAICompatibleProvider(AIProvider):
             ) from exc
         except openai.APIError as exc:
             message = redact(str(exc), self.config.api_key)
-            self._record_call(call_number, requested_at, success=False, error=message)
+            self._record_call(call_number, requested_at, operation, success=False, error=message)
             raise ProviderMalformedResponseError(f"Errore di comunicazione con il provider: {message}") from exc
         except ValidationError as exc:
             # L'SDK ha ricevuto una risposta HTTP valida, ma il testo generato dal
             # modello non è JSON conforme allo schema stretto richiesto: l'SDK
             # stesso (non il nostro codice) ha tentato e fallito il parsing.
             message = redact(str(exc), self.config.api_key)
-            self._record_call(call_number, requested_at, success=False, error=message)
+            self._record_call(call_number, requested_at, operation, success=False, error=message)
             raise ProviderMalformedResponseError(
                 f"Il provider non ha prodotto un output conforme allo schema JSON stretto richiesto: {message}"
             ) from exc
@@ -288,7 +299,7 @@ class OpenAICompatibleProvider(AIProvider):
         if refusal_text is not None:
             message = redact(refusal_text, self.config.api_key)
             self._record_call(
-                call_number, requested_at, success=False, error=message,
+                call_number, requested_at, operation, success=False, error=message,
                 responded_at=responded_at, usage=usage,
             )
             raise ProviderRefusalError(f"Il provider ha rifiutato la richiesta: {message}")
@@ -296,7 +307,7 @@ class OpenAICompatibleProvider(AIProvider):
         if response.status == "incomplete":
             reason = response.incomplete_details.reason if response.incomplete_details else None
             self._record_call(
-                call_number, requested_at, success=False,
+                call_number, requested_at, operation, success=False,
                 error=f"risposta incompleta (motivo: {reason})",
                 responded_at=responded_at, usage=usage,
             )
@@ -308,7 +319,7 @@ class OpenAICompatibleProvider(AIProvider):
                 self.config.api_key,
             )
             self._record_call(
-                call_number, requested_at, success=False, error=message,
+                call_number, requested_at, operation, success=False, error=message,
                 responded_at=responded_at, usage=usage,
             )
             raise ProviderMalformedResponseError(f"Il provider ha risposto con stato inatteso: {message}")
@@ -316,7 +327,7 @@ class OpenAICompatibleProvider(AIProvider):
         parsed = response.output_parsed
         if parsed is None:
             self._record_call(
-                call_number, requested_at, success=False,
+                call_number, requested_at, operation, success=False,
                 error="output_parsed è None: risposta non conforme allo schema JSON stretto",
                 responded_at=responded_at, usage=usage,
             )
@@ -324,10 +335,10 @@ class OpenAICompatibleProvider(AIProvider):
                 "Il provider non ha prodotto un output conforme allo schema JSON stretto richiesto."
             )
 
-        call_cost = self._apply_usage_budget(call_number, requested_at, responded_at, usage)
+        call_cost = self._apply_usage_budget(call_number, requested_at, responded_at, usage, operation)
 
         self._record_call(
-            call_number, requested_at, success=True, responded_at=responded_at,
+            call_number, requested_at, operation, success=True, responded_at=responded_at,
             usage=usage, estimated_cost_usd=call_cost,
         )
         return parsed
@@ -341,7 +352,12 @@ class OpenAICompatibleProvider(AIProvider):
         return self._call_count
 
     def _apply_usage_budget(
-        self, call_number: int, requested_at: str, responded_at: str, usage: dict | None
+        self,
+        call_number: int,
+        requested_at: str,
+        responded_at: str,
+        usage: dict | None,
+        operation: str,
     ) -> float | None:
         usage = usage or {}
         total_tokens = int(usage.get("total_tokens") or 0)
@@ -351,7 +367,7 @@ class OpenAICompatibleProvider(AIProvider):
 
         if self._tokens_used > self.config.max_tokens_per_run:
             self._record_call(
-                call_number, requested_at, success=False, error="usage budget exceeded",
+                call_number, requested_at, operation, success=False, error="usage budget exceeded",
                 responded_at=responded_at, usage=usage, estimated_cost_usd=call_cost,
             )
             raise ProviderUsageBudgetExceededError(
@@ -360,7 +376,7 @@ class OpenAICompatibleProvider(AIProvider):
             )
         if self._cost_used_usd > self.config.max_cost_usd_per_run:
             self._record_call(
-                call_number, requested_at, success=False, error="cost budget exceeded",
+                call_number, requested_at, operation, success=False, error="cost budget exceeded",
                 responded_at=responded_at, usage=usage, estimated_cost_usd=call_cost,
             )
             raise ProviderCostBudgetExceededError(
@@ -378,6 +394,7 @@ class OpenAICompatibleProvider(AIProvider):
         self,
         call_number: int,
         requested_at: str,
+        operation: str,
         *,
         success: bool,
         error: str | None = None,
@@ -389,6 +406,7 @@ class OpenAICompatibleProvider(AIProvider):
             provider_name=self.name,
             model=self.config.model,
             is_simulated=False,
+            operation=operation,
             call_number=call_number,
             requested_at=requested_at,
             responded_at=responded_at or _now(),

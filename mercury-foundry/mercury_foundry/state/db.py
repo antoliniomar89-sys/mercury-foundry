@@ -23,3 +23,29 @@ def init_schema(conn: sqlite3.Connection) -> None:
     schema_sql = config.SCHEMA_PATH.read_text()
     conn.executescript(schema_sql)
     conn.commit()
+    _migrate_provider_calls_columns(conn)
+
+
+def _migrate_provider_calls_columns(conn: sqlite3.Connection) -> None:
+    """Aggiunge in modo idempotente le colonne `run_id`/`operation` a `provider_calls`.
+
+    `CREATE TABLE IF NOT EXISTS` (sopra) non altera una tabella già esistente:
+    un DB creato PRIMA di questo task ha `provider_calls` senza queste due
+    colonne. Qui le aggiungiamo se mancanti, così sia un DB nuovo sia uno
+    esistente arrivano allo stesso schema, senza toccare i dati già presenti.
+    """
+    existing_columns = {
+        row["name"] for row in conn.execute("PRAGMA table_info(provider_calls)").fetchall()
+    }
+    if "run_id" not in existing_columns:
+        conn.execute("ALTER TABLE provider_calls ADD COLUMN run_id TEXT")
+    if "operation" not in existing_columns:
+        conn.execute("ALTER TABLE provider_calls ADD COLUMN operation TEXT NOT NULL DEFAULT 'UNKNOWN'")
+    conn.commit()
+    # L'indice univoco di deduplicazione va (ri)creato dopo che le colonne
+    # esistono di sicuro; è idempotente (IF NOT EXISTS).
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_provider_calls_dedup "
+        "ON provider_calls(run_id, provider_name, call_number)"
+    )
+    conn.commit()

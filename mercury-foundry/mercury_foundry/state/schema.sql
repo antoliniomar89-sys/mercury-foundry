@@ -73,8 +73,18 @@ CREATE TABLE IF NOT EXISTS candidates (
 -- Telemetria per-chiamata del provider AI (reale o simulato). Popolata SOLO
 -- quando un provider produce un ProviderCallRecord (i provider simulati non
 -- fanno chiamate esterne, quindi normalmente non generano righe qui).
+--
+-- Ogni chiamata REALE del provider (riuscita o fallita, in qualunque fase:
+-- PLAN, PATCH, EVALUATION, CONNECTIVITY_CHECK) produce ESATTAMENTE una riga
+-- qui: `run_id` identifica il run (oggi coincide con il goal_id: un goal
+-- sottomesso è un run del Foundry), `operation` identifica la fase. La
+-- combinazione (run_id, provider_name, call_number) è univoca: un secondo
+-- tentativo di persistere lo STESSO ProviderCallRecord (stesso run/provider/
+-- call_number) non crea una riga duplicata (vedi models.create_provider_call).
+-- La tabella resta append-only: nessun codice della app la aggiorna o cancella.
 CREATE TABLE IF NOT EXISTS provider_calls (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id TEXT,
     goal_id INTEGER REFERENCES goals(id),
     task_id INTEGER REFERENCES tasks(id),
     attempt_id INTEGER REFERENCES attempts(id),
@@ -82,6 +92,7 @@ CREATE TABLE IF NOT EXISTS provider_calls (
     provider_name TEXT NOT NULL,
     model TEXT,
     is_simulated INTEGER NOT NULL,
+    operation TEXT NOT NULL DEFAULT 'UNKNOWN', -- PLAN | PATCH | EVALUATION | CONNECTIVITY_CHECK
     call_number INTEGER NOT NULL,
     requested_at TEXT NOT NULL,
     responded_at TEXT,
@@ -91,6 +102,20 @@ CREATE TABLE IF NOT EXISTS provider_calls (
     error_summary TEXT, -- SEMPRE già redatto: mai segreti/prompt completi
     created_at TEXT NOT NULL
 );
+
+-- Difesa in profondità contro record duplicati per la stessa chiamata reale:
+-- una riga per (run_id, provider_name, call_number). NULL è considerato
+-- distinto da SQLite, quindi righe pre-migrazione con run_id NULL non
+-- collidono tra loro; ogni nuova riga scritta da questo task valorizza
+-- sempre run_id.
+--
+-- NOTA: l'indice NON viene creato qui con CREATE TABLE, perché questo script
+-- viene eseguito anche contro DB pre-esistenti che non hanno ancora la
+-- colonna `run_id` (aggiunta via ALTER TABLE in una migrazione idempotente
+-- separata, vedi `state.db._migrate_provider_calls_columns`). Se l'indice
+-- fosse qui, fallirebbe su un DB vecchio PRIMA che la migrazione possa
+-- aggiungere la colonna. L'indice viene quindi creato da quella migrazione,
+-- che gira DOPO l'ALTER TABLE, sia per DB nuovi sia per DB esistenti.
 
 CREATE TABLE IF NOT EXISTS audit_log (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

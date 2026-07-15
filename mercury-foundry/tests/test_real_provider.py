@@ -616,7 +616,120 @@ def test_provider_call_metadata_persists_when_real_provider_blocks_task(tmp_path
     assert len(calls) == 1
     assert calls[0]["success"] == 0
     assert calls[0]["is_simulated"] == 0
+    assert calls[0]["operation"] == "PLAN"
+    assert calls[0]["run_id"] == str(goal["id"])
     assert FAKE_API_KEY not in (calls[0]["error_summary"] or "")
 
     # Nessun file scritto nella sandbox: il fallimento è avvenuto in fase di piano.
     assert list(workspace.root.glob("**/*.py")) == []
+
+
+def test_successful_planning_call_is_persisted_in_provider_calls(tmp_path):
+    """Regressione del gap identificato: una chiamata di PIANIFICAZIONE
+    RIUSCITA deve produrre esattamente una riga in `provider_calls`, non solo
+    quelle fallite. Copre run_id, provider_name, model, is_simulated,
+    operation, success, timestamp, usage/token, costo stimato ed
+    error_summary (qui None, perché la chiamata è riuscita)."""
+    from mercury_foundry.agents.builder import Builder
+    from mercury_foundry.agents.evaluator import Evaluator
+    from mercury_foundry.execution.loop import ExecutionLoop
+    from mercury_foundry.orchestrator.orchestrator import Orchestrator
+    from mercury_foundry.sandbox.workspace import Workspace
+    from mercury_foundry.state import db, models
+    from mercury_foundry.testing.runner import TestRunner
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=_base_response(output=_message_output(_plan_payload())))
+
+    provider = OpenAICompatibleProvider(_config(), client=_mock_client(handler))
+
+    conn = db.connect(tmp_path / "mercury_foundry.db")
+    workspace = Workspace(tmp_path / "target_project")
+    builder = Builder(provider, workspace)
+    evaluator = Evaluator(TestRunner(workspace.root))
+    execution_loop = ExecutionLoop(conn, builder, evaluator)
+    orchestrator = Orchestrator(conn, provider, execution_loop)
+
+    goal_id = orchestrator.submit_goal("aggiungi una capability qualsiasi")
+
+    calls = models.list_provider_calls_for_goal(conn, goal_id)
+    assert len(calls) == 1
+    call = calls[0]
+    assert call["run_id"] == str(goal_id)
+    assert call["provider_name"] == provider.name
+    assert call["model"] == "test-model"
+    assert call["is_simulated"] == 0
+    assert call["operation"] == "PLAN"
+    assert call["success"] == 1
+    assert call["requested_at"] is not None
+    assert call["responded_at"] is not None
+    assert json.loads(call["usage_json"])["total_tokens"] == 28
+    assert call["estimated_cost_usd"] == pytest.approx((28 / 1000.0) * 0.01)
+    assert call["error_summary"] is None
+
+    # Nessun file scritto: submit_goal si ferma alla creazione dei task, non
+    # invoca ancora il Builder.
+    assert list(workspace.root.glob("**/*.py")) == []
+
+
+def test_persisting_the_same_provider_call_record_twice_does_not_duplicate(tmp_path):
+    """Anche se qualcosa tentasse di persistere DUE VOLTE lo stesso
+    ProviderCallRecord (stesso run_id/provider_name/call_number), deve
+    risultare esattamente UNA riga in `provider_calls` — mai due."""
+    from mercury_foundry.state import db, models
+
+    conn = db.connect(tmp_path / "mercury_foundry.db")
+    goal_id = models.create_goal(conn, "obiettivo di test")
+    run_id = str(goal_id)
+
+    provider = OpenAICompatibleProvider(
+        _config(),
+        client=_mock_client(
+            lambda request: httpx.Response(200, json=_base_response(output=_message_output(_plan_payload())))
+        ),
+    )
+    provider.propose_plan("obiettivo qualsiasi")
+    record = provider.last_call_record
+    assert record is not None
+
+    first_id = models.persist_provider_call_record(conn, run_id=run_id, goal_id=goal_id, record=record)
+    second_id = models.persist_provider_call_record(conn, run_id=run_id, goal_id=goal_id, record=record)
+
+    assert first_id == second_id
+    calls = models.list_provider_calls_for_goal(conn, goal_id)
+    assert len(calls) == 1
+
+
+def test_create_provider_call_raw_duplicate_insert_is_idempotent(tmp_path):
+    """Stesso test della funzione di più basso livello (`create_provider_call`),
+    per assicurare che la deduplicazione valga anche fuori dal percorso
+    `persist_provider_call_record`, e che l'indice univoco a livello di
+    schema regga anche se un chiamante costruisse i kwargs a mano."""
+    from mercury_foundry.state import db, models
+
+    conn = db.connect(tmp_path / "mercury_foundry.db")
+    goal_id = models.create_goal(conn, "obiettivo di test")
+    kwargs = dict(
+        run_id=str(goal_id),
+        goal_id=goal_id,
+        task_id=None,
+        attempt_id=None,
+        provider_name="openai-compatible:test-model",
+        model="test-model",
+        is_simulated=False,
+        operation="PLAN",
+        call_number=1,
+        requested_at="2026-07-15T00:00:00+00:00",
+        responded_at="2026-07-15T00:00:01+00:00",
+        success=True,
+        usage={"total_tokens": 10},
+        estimated_cost_usd=0.0001,
+        error_summary=None,
+    )
+
+    first_id = models.create_provider_call(conn, **kwargs)
+    second_id = models.create_provider_call(conn, **kwargs)
+
+    assert first_id == second_id
+    rows = conn.execute("SELECT * FROM provider_calls WHERE run_id = ?", (str(goal_id),)).fetchall()
+    assert len(rows) == 1

@@ -25,13 +25,26 @@ missing `content` for create/update, and — only if the caller passes `context[
 (not currently threaded through by `Builder`, so default behavior is unchanged) — rejects a
 patch that proposes more files than allowed. All violations raise `ProviderUnsafePatchError`.
 
-## Known pre-existing gap (not fixed, intentionally out of scope)
-`Orchestrator.submit_goal` only persists a `provider_calls` row for the PLAN step when it
-**fails** (ProviderExecutionError). A successful plan call is never written to `provider_calls`
-— only `ai_provider.last_call_record` holds it transiently, then gets overwritten by the next
-call. Build/attempt calls (via `ExecutionLoop`) ARE always persisted, success or failure. So
-`list_provider_calls_for_goal` undercounts real spend when planning succeeds on the first try.
+## provider_calls audit trail (gap fixed)
+The PLAN-success persistence gap described above is fixed: every real provider call (PLAN,
+PATCH, EVALUATION, CONNECTIVITY_CHECK — success or failure) now persists exactly one
+`provider_calls` row via a single shared helper (`models.persist_provider_call_record`), used
+by both `Orchestrator.submit_goal` and `ExecutionLoop`. `run_id` = `str(goal_id)` (one CLI
+`submit` covers PLAN+BUILD for one goal in one provider instance, so goal_id is a valid run
+correlation key without a new run-tracking subsystem). `ProviderCallRecord` gained a required
+`operation` field, populated by the provider itself in `real_provider.py`. Dedup is enforced via
+a `UNIQUE(run_id, provider_name, call_number)` index plus a pre-insert existence check in
+`models.create_provider_call` (append-only: never updates/deletes, just skips duplicate inserts).
 
-**How to apply:** if asked to fix cost/usage reporting accuracy for Mercury Foundry, this is
-the first place to look — `Orchestrator.submit_goal`'s success path needs an explicit
-`models.create_provider_call` call mirroring the exception-handler branch already there.
+**Why:** the user explicitly required no undercounted spend and no duplicate audit rows before
+running the Foundry for real again.
+
+**How to apply / gotcha for future schema changes:** when adding a migrated column to an
+existing SQLite table here, never put a dependent `CREATE INDEX`/constraint referencing the new
+column directly in `schema.sql` — `executescript` runs unconditionally against old DBs where
+`CREATE TABLE IF NOT EXISTS` is a no-op, so it fails with "no such column" before the
+idempotent `ALTER TABLE` migration in `state/db.py` (`_migrate_provider_calls_columns`, run
+after `executescript`) gets a chance to add the column. Put such indexes in the migration
+function instead, after the `ALTER TABLE`. Also: any code path that opens/initializes this DB
+(e.g. `diagnostics.py`'s doctor check) must call the same `state.db.init_schema`, not
+re-implement its own `executescript`, or it'll silently skip the migration and desync.

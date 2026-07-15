@@ -25,24 +25,20 @@ def _persist_call_record(conn, *, goal_id: int, task_id: int, attempt_id: int | 
 
     I provider simulati (FakeModel) non fanno chiamate esterne e lasciano
     `last_call_record = None`: in quel caso non viene scritta alcuna riga.
+
+    `run_id` è derivato da `goal_id` (stessa convenzione di
+    `Orchestrator.submit_goal`: un goal sottomesso è un run del Foundry),
+    così le chiamate PLAN e BUILD dello stesso goal condividono un run_id e
+    la deduplicazione in `models.create_provider_call` funziona su tutto il
+    ciclo di vita del goal, non solo entro una singola fase.
     """
-    if record is None:
-        return
-    models.create_provider_call(
+    models.persist_provider_call_record(
         conn,
+        run_id=str(goal_id),
         goal_id=goal_id,
         task_id=task_id,
         attempt_id=attempt_id,
-        provider_name=record.provider_name,
-        model=record.model,
-        is_simulated=record.is_simulated,
-        call_number=record.call_number,
-        requested_at=record.requested_at,
-        responded_at=record.responded_at,
-        success=record.success,
-        usage=record.usage,
-        estimated_cost_usd=record.estimated_cost_usd,
-        error_summary=record.error_summary,
+        record=record,
     )
 
 
