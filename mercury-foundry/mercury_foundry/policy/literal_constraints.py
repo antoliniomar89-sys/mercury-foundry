@@ -16,11 +16,20 @@ mai il provider AI: confronta solo dati già ricevuti con vincoli già noti.
 from __future__ import annotations
 
 import json
+import re
+import shlex
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
 from mercury_foundry.ai.provider import FileChange, PatchProposal
+
+# Riconosce assegnazioni di variabili d'ambiente in stile shell POSIX
+# (`NAME=value`) SOLO quando compaiono come token iniziali di un comando,
+# es. "PYTHONDONTWRITEBYTECODE=1 pytest -q". Non è un parser di shell: non
+# interpreta quoting/espansioni oltre a `shlex.split`, e non invoca mai
+# `shell=True` — l'esecuzione resta un exec diretto dell'argv risultante.
+_ENV_ASSIGNMENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=.*$")
 
 # Cartelle/artefatti generati automaticamente dall'esecuzione dei test
 # (bytecode cache, cache pytest), mai parte della patch proposta dal
@@ -91,6 +100,27 @@ class LiteralConstraints:
 
     def restricts_extra_files(self) -> bool:
         return self.forbidden_extra_files or self.allowed_files is not None
+
+    def parsed_test_command(self) -> tuple[dict[str, str], list[str]] | None:
+        """Scompone `exact_test_command` in (env_overrides, argv).
+
+        Consente la sintassi comune "NAME=VALUE comando args..." (variabili
+        d'ambiente anteposte) senza mai delegare a una shell: i token sono
+        prodotti da `shlex.split` (stesso tokenizer POSIX-style già in uso),
+        poi i token iniziali che sono assegnazioni `NAME=VALUE` vengono
+        rimossi dall'argv e diventano override d'ambiente per il subprocess.
+        Ritorna `None` se `exact_test_command` non è impostato.
+        """
+        if not self.exact_test_command:
+            return None
+        tokens = shlex.split(self.exact_test_command)
+        env: dict[str, str] = {}
+        idx = 0
+        while idx < len(tokens) and _ENV_ASSIGNMENT_RE.match(tokens[idx]):
+            name, _, value = tokens[idx].partition("=")
+            env[name] = value
+            idx += 1
+        return env, tokens[idx:]
 
 
 @dataclass

@@ -1,0 +1,11 @@
+{
+  "exact_file_path": "MERCURY_FOUNDRY_PROBE.md",
+  "exact_file_content": "# Mercury Foundry Real-Provider Probe\n\nstatus: candidate\npurpose: verify the complete controlled real-provider workflow\n",
+  "allowed_files": [
+    "MERCURY_FOUNDRY_PROBE.md",
+    "test_mercury_foundry_probe.py"
+  ],
+  "forbidden_extra_files": true,
+  "exact_test_command": "PYTHONDONTWRITEBYTECODE=1 pytest -q -p no:cacheprovider",
+  "byte_exact_required": true
+}

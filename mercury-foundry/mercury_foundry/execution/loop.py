@@ -9,7 +9,6 @@ pass/fail sono decisi qui da codice deterministico, mai dal modello.
 
 from __future__ import annotations
 
-import shlex
 import sqlite3
 from dataclasses import dataclass
 
@@ -68,11 +67,10 @@ class ExecutionLoop:
         literal_constraints = LiteralConstraints.from_json(
             goal_row["literal_constraints_json"] if goal_row is not None else None
         )
-        exact_test_command = (
-            shlex.split(literal_constraints.exact_test_command)
-            if literal_constraints is not None and literal_constraints.exact_test_command
-            else None
+        parsed_command = (
+            literal_constraints.parsed_test_command() if literal_constraints is not None else None
         )
+        exact_test_env, exact_test_command = parsed_command if parsed_command is not None else (None, None)
 
         models.update_task_status(self.conn, task_id, "in_progress")
         log_action(
@@ -231,7 +229,7 @@ class ExecutionLoop:
                 actor="system",
                 payload={},
             )
-            eval_result = self.evaluator.evaluate(command=exact_test_command)
+            eval_result = self.evaluator.evaluate(command=exact_test_command, env=exact_test_env)
             models.record_test_result(
                 self.conn,
                 attempt_id,

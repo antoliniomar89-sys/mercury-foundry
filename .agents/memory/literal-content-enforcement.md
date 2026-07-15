@@ -31,3 +31,12 @@ if a spec forbids writing any test file, that is a structural conflict with
 a deterministic evaluator treating "no tests ran" as failure, not a content
 bug. Either allow a minimal literal test file, or supply an explicit
 exact-test-command constraint that the engine executes directly.
+
+If an exact-test-command constraint is expressed with a leading shell-style
+env assignment (e.g. `PYTHONDONTWRITEBYTECODE=1 pytest -q`), an engine that
+executes argv directly (never `shell=True`, by design, to avoid injection)
+must explicitly peel off `NAME=VALUE` leading tokens and pass them as
+subprocess `env` overrides — otherwise the whole first token is treated as
+the literal executable name and fails with `FileNotFoundError`. This is a
+real validation error worth fixing in the engine (not the constraints file),
+since the shell-style prefix syntax is a reasonable/common thing to specify.

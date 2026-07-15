@@ -251,6 +251,94 @@ def test_literal_constraints_from_json_none_or_empty_is_none():
     assert LiteralConstraints.from_json("") is None
 
 
+# --- exact_test_command con variabili d'ambiente anteposte ("NAME=VALUE cmd ...") ---
+
+
+def test_parsed_test_command_splits_leading_env_assignments():
+    """Sintassi comune 'NAME=VALUE comando args...': il motore non usa mai
+    una shell, quindi le assegnazioni d'ambiente anteposte vanno riconosciute
+    ed estratte esplicitamente invece di essere passate come argv[0] letterale
+    (che fallirebbe con FileNotFoundError)."""
+    constraints = LiteralConstraints(
+        exact_test_command="PYTHONDONTWRITEBYTECODE=1 pytest -q -p no:cacheprovider"
+    )
+
+    env, argv = constraints.parsed_test_command()
+
+    assert env == {"PYTHONDONTWRITEBYTECODE": "1"}
+    assert argv == ["pytest", "-q", "-p", "no:cacheprovider"]
+
+
+def test_parsed_test_command_multiple_env_assignments():
+    constraints = LiteralConstraints(exact_test_command="A=1 B=2 python3 -m pytest -q")
+
+    env, argv = constraints.parsed_test_command()
+
+    assert env == {"A": "1", "B": "2"}
+    assert argv == ["python3", "-m", "pytest", "-q"]
+
+
+def test_parsed_test_command_without_env_assignments():
+    constraints = LiteralConstraints(exact_test_command="pytest -q")
+
+    env, argv = constraints.parsed_test_command()
+
+    assert env == {}
+    assert argv == ["pytest", "-q"]
+
+
+def test_parsed_test_command_none_when_unset():
+    constraints = LiteralConstraints()
+    assert constraints.parsed_test_command() is None
+
+
+def test_engine_executes_env_prefixed_exact_test_command_without_shell(tmp_path):
+    """Test end-to-end: un `exact_test_command` con variabile d'ambiente
+    anteposta (come previsto da MF-PREP-002) deve eseguire realmente pytest
+    con quell'override, non fallire con FileNotFoundError."""
+    constraints = LiteralConstraints(
+        exact_file_path="PROBE.md",
+        exact_file_content="contenuto esatto\n",
+        allowed_files=("PROBE.md", "test_probe.py"),
+        forbidden_extra_files=True,
+        exact_test_command="PYTHONDONTWRITEBYTECODE=1 pytest -q -p no:cacheprovider",
+    )
+
+    class ExactProviderWithRealTest(AIProvider):
+        name = "exact-env-fake"
+        is_simulated = True
+
+        def propose_plan(self, goal_description):
+            return ["task"]
+
+        def propose_patch(self, task_description, context):
+            return PatchProposal(
+                summary="ok",
+                files=[FileChange(path="PROBE.md", content="contenuto esatto\n")],
+                test_files=[
+                    FileChange(
+                        path="test_probe.py",
+                        content=(
+                            "from pathlib import Path\n\n"
+                            "def test_probe():\n"
+                            "    p = Path(__file__).parent / 'PROBE.md'\n"
+                            "    assert p.read_text(encoding='utf-8') == 'contenuto esatto\\n'\n"
+                        ),
+                    )
+                ],
+                provider_name=self.name,
+                is_simulated=True,
+            )
+
+    conn, workspace, orchestrator = _build_foundry_with_provider(tmp_path, ExactProviderWithRealTest())
+    goal_id = orchestrator.submit_goal("task con env prefix", literal_constraints=constraints)
+    goal_run = orchestrator.run_goal(goal_id)
+
+    assert goal_run.final_status == "awaiting_approval"
+    outcome = goal_run.task_outcomes[0]
+    assert outcome.status == "candidate_created"
+
+
 # --- integrazione con ExecutionLoop / Builder (fail-closed end-to-end) --------------
 
 
