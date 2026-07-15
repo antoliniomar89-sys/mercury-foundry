@@ -51,3 +51,36 @@ class Workspace:
             )
         )
         return FileWriteRecord(path=relative_path, diff=diff, created=not existed)
+
+    def write_files_atomic(self, changes: list[tuple[str, str]]) -> list[FileWriteRecord]:
+        """Scrive un batch di file "tutto o niente": se una qualunque scrittura
+        del batch fallisce (es. errore di I/O, violazione di sandbox su un
+        percorso successivo), i file GIA' scritti in questa chiamata vengono
+        ripristinati al loro stato precedente (contenuto originale, oppure
+        cancellati se non esistevano prima) prima di rilanciare l'eccezione.
+
+        Questo è ciò che rende una BUILD "atomica" a livello di filesystem:
+        una candidate non può mai nascere da uno stato parzialmente scritto
+        della sandbox."""
+        # Snapshot del pre-stato di OGNI percorso target, calcolato prima di
+        # scrivere qualunque cosa, così il rollback conosce lo stato originale
+        # anche di file che verranno toccati più avanti nel batch.
+        pre_state: dict[Path, tuple[bool, str]] = {}
+        for relative_path, _content in changes:
+            path = self.resolve(relative_path)
+            pre_state[path] = (path.exists(), path.read_text() if path.exists() else "")
+
+        written: list[FileWriteRecord] = []
+        try:
+            for relative_path, content in changes:
+                written.append(self.write_file(relative_path, content))
+            return written
+        except Exception:
+            for relative_path, _content in changes[: len(written)]:
+                path = self.resolve(relative_path)
+                existed_before, old_content = pre_state[path]
+                if existed_before:
+                    path.write_text(old_content)
+                else:
+                    path.unlink(missing_ok=True)
+            raise

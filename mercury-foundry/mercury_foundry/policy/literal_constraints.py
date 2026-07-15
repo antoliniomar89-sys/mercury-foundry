@@ -51,6 +51,15 @@ class LiteralConstraints:
     forbidden_extra_files: bool = False
     exact_test_command: str | None = None
     byte_exact_required: bool = True
+    # File che DEVONO essere presenti nella PatchProposal (dopo l'enforcement
+    # dei vincoli letterali) prima che la BUILD sia considerata completa e si
+    # possa passare a TEST. A differenza di `allowed_files` (che è un elenco
+    # di file PERMESSI, non necessariamente tutti obbligatori), questo campo
+    # è opzionale ed esplicito: se non impostato, il gate di completezza non
+    # impone alcun file specifico (comportamento identico a prima di questo
+    # campo). Nessun nome di file applicativo è hardcoded nel motore: questo
+    # elenco arriva sempre dal goal/vincolo, mai da logica specifica di un probe.
+    required_files: tuple[str, ...] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -60,6 +69,7 @@ class LiteralConstraints:
             "forbidden_extra_files": self.forbidden_extra_files,
             "exact_test_command": self.exact_test_command,
             "byte_exact_required": self.byte_exact_required,
+            "required_files": list(self.required_files) if self.required_files is not None else None,
         }
 
     def to_json(self) -> str:
@@ -68,6 +78,7 @@ class LiteralConstraints:
     @staticmethod
     def from_dict(data: dict[str, Any]) -> "LiteralConstraints":
         allowed = data.get("allowed_files")
+        required = data.get("required_files")
         return LiteralConstraints(
             exact_file_path=data.get("exact_file_path"),
             exact_file_content=data.get("exact_file_content"),
@@ -75,6 +86,7 @@ class LiteralConstraints:
             forbidden_extra_files=bool(data.get("forbidden_extra_files", False)),
             exact_test_command=data.get("exact_test_command"),
             byte_exact_required=bool(data.get("byte_exact_required", True)),
+            required_files=tuple(required) if required is not None else None,
         )
 
     @staticmethod
@@ -100,6 +112,21 @@ class LiteralConstraints:
 
     def restricts_extra_files(self) -> bool:
         return self.forbidden_extra_files or self.allowed_files is not None
+
+    def required_files_set(self) -> set[str]:
+        """File che devono essere presenti in una `PatchProposal` perché la
+        BUILD sia considerata completa.
+
+        Deriva SOLO da campi espliciti del vincolo stesso (mai da nomi di
+        file hardcoded nel motore): se `required_files` è impostato, quello è
+        l'elenco esatto; altrimenti, se è noto un `exact_file_path`, quel
+        singolo file è comunque obbligatorio. Se nessuno dei due è
+        impostato, ritorna un insieme vuoto (nessun requisito aggiuntivo)."""
+        if self.required_files is not None:
+            return set(self.required_files)
+        if self.exact_file_path is not None:
+            return {self.exact_file_path}
+        return set()
 
     def parsed_test_command(self) -> tuple[dict[str, str], list[str]] | None:
         """Scompone `exact_test_command` in (env_overrides, argv).
@@ -140,6 +167,50 @@ class EnforcementReport:
 class LiteralVerificationResult:
     passed: bool
     reasons: list[str] = field(default_factory=list)
+
+
+@dataclass
+class BuildCompletenessResult:
+    """Esito del gate di completezza della BUILD, calcolato IN MEMORIA sulla
+    `PatchProposal` già corretta dall'enforcement, PRIMA di qualunque
+    scrittura su disco e PRIMA che TEST possa partire."""
+
+    complete: bool
+    missing_files: list[str] = field(default_factory=list)
+    reasons: list[str] = field(default_factory=list)
+
+
+def compute_build_completeness(
+    proposal: PatchProposal, constraints: LiteralConstraints | None
+) -> BuildCompletenessResult:
+    """Verifica che una `PatchProposal` sia completa PRIMA di scrivere nulla.
+
+    Puramente generico: non conosce nomi di file applicativi specifici, solo
+    ciò che `constraints.required_files_set()` dichiara esplicitamente (se
+    presente) e il caso banale di una proposta senza alcun file. Questo è ciò
+    che rende una BUILD "atomica e guidata dai vincoli": una proposta che
+    manca di un file richiesto (es. il file di test, quando il piano è stato
+    frammentato in più task e solo alcuni producono i file necessari) viene
+    bloccata qui, PRIMA che TEST parta su uno stato a metà, invece di lasciare
+    che pytest riporti "no tests ran" o un fallimento fuorviante.
+    """
+    proposed_paths = {c.path for c in (*proposal.files, *proposal.test_files)}
+
+    reasons: list[str] = []
+    missing: list[str] = []
+
+    if not proposed_paths:
+        reasons.append("la proposta non contiene alcun file: BUILD vuota, niente da verificare con TEST")
+
+    if constraints is not None:
+        required = constraints.required_files_set()
+        missing = sorted(required - proposed_paths)
+        if missing:
+            reasons.append(
+                f"file richiesti dal goal ma assenti dalla proposta di BUILD: {missing}"
+            )
+
+    return BuildCompletenessResult(complete=not reasons, missing_files=missing, reasons=reasons)
 
 
 def _find_by_path(changes: list[FileChange], path: str) -> FileChange | None:

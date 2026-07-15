@@ -92,9 +92,30 @@ class Orchestrator:
             record=self.ai_provider.last_call_record,
         )
 
-        for index, task_description in enumerate(task_descriptions):
+        # BUILD atomica: un piano con più step NON viene eseguito come N cicli
+        # indipendenti di BUILD->TEST (un task per step) — questo è esattamente
+        # l'architettura che ha causato il blocco osservato in una run reale
+        # (goal "crea due file" frammentato in 7 task, TEST partito prima che
+        # il file di test esistesse). Tutti gli step del piano vengono invece
+        # aggregati in UN SOLO task: un'unica BUILD atomica riceve l'intera
+        # descrizione del goal (tutti gli step insieme) e produce, in un solo
+        # ciclo BUILD->TEST, tutto ciò che serve. Con un piano a un solo step
+        # (comportamento storico) non cambia nulla: resta un singolo task con
+        # la descrizione originale.
+        if len(task_descriptions) > 1:
+            aggregated_description = "\n".join(
+                f"{i + 1}. {step}" for i, step in enumerate(task_descriptions)
+            )
+            log_action(
+                self.conn,
+                entity_type="goal",
+                entity_id=goal_id,
+                action="PLAN_STEPS_AGGREGATED_INTO_ATOMIC_BUILD",
+                actor="system",
+                payload={"goal_id": goal_id, "step_count": len(task_descriptions), "steps": task_descriptions},
+            )
             task_id = models.create_task(
-                self.conn, goal_id, index, task_description, assigned_to="builder"
+                self.conn, goal_id, 0, aggregated_description, assigned_to="builder"
             )
             log_action(
                 self.conn,
@@ -102,8 +123,26 @@ class Orchestrator:
                 entity_id=task_id,
                 action="TASK_CREATED",
                 actor="system",
-                payload={"goal_id": goal_id, "order_index": index, "description": task_description},
+                payload={
+                    "goal_id": goal_id,
+                    "order_index": 0,
+                    "description": aggregated_description,
+                    "aggregated_from_steps": task_descriptions,
+                },
             )
+        else:
+            for index, task_description in enumerate(task_descriptions):
+                task_id = models.create_task(
+                    self.conn, goal_id, index, task_description, assigned_to="builder"
+                )
+                log_action(
+                    self.conn,
+                    entity_type="task",
+                    entity_id=task_id,
+                    action="TASK_CREATED",
+                    actor="system",
+                    payload={"goal_id": goal_id, "order_index": index, "description": task_description},
+                )
 
         models.update_goal_status(self.conn, goal_id, "in_progress")
         return goal_id

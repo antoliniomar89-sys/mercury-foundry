@@ -12,10 +12,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from mercury_foundry.ai.provider import AIProvider, PatchProposal
-from mercury_foundry.policy.errors import LiteralConstraintViolationError
+from mercury_foundry.policy.errors import BuildIncompleteError, LiteralConstraintViolationError
 from mercury_foundry.policy.literal_constraints import (
+    BuildCompletenessResult,
     EnforcementReport,
     LiteralConstraints,
+    compute_build_completeness,
     enforce_patch_proposal,
 )
 from mercury_foundry.sandbox.workspace import FileWriteRecord, Workspace
@@ -26,6 +28,7 @@ class BuildResult:
     proposal: PatchProposal
     file_writes: list[FileWriteRecord]
     enforcement: EnforcementReport
+    completeness: BuildCompletenessResult
 
     @property
     def diff_text(self) -> str:
@@ -57,8 +60,29 @@ class Builder:
             # deterministico e sicuro (vedi `enforce_patch_proposal`).
             raise LiteralConstraintViolationError(enforcement.block_reason)
 
-        file_writes: list[FileWriteRecord] = []
-        for change in [*corrected_proposal.files, *corrected_proposal.test_files]:
-            file_writes.append(self.workspace.write_file(change.path, change.content))
+        # Gate di completezza della BUILD: calcolato IN MEMORIA sulla proposta
+        # già corretta, PRIMA di qualunque scrittura su disco e PRIMA che TEST
+        # possa partire. Questo è ciò che rende la BUILD "atomica e guidata
+        # dai vincoli": una proposta a metà (es. manca il file di test perché
+        # il piano è stato frammentato) blocca qui, non genera mai uno stato
+        # parziale su cui poi TEST verrebbe eseguito prematuramente.
+        completeness = compute_build_completeness(corrected_proposal, literal_constraints)
+        if not completeness.complete:
+            raise BuildIncompleteError("; ".join(completeness.reasons))
 
-        return BuildResult(proposal=corrected_proposal, file_writes=file_writes, enforcement=enforcement)
+        # Scrittura atomica: se una qualunque scrittura del batch fallisce, i
+        # file già scritti in questa chiamata vengono ripristinati al loro
+        # stato precedente prima di rilanciare l'eccezione — nessuna candidate
+        # può nascere da uno stato parzialmente scritto della sandbox.
+        changes = [
+            (change.path, change.content)
+            for change in [*corrected_proposal.files, *corrected_proposal.test_files]
+        ]
+        file_writes = self.workspace.write_files_atomic(changes)
+
+        return BuildResult(
+            proposal=corrected_proposal,
+            file_writes=file_writes,
+            enforcement=enforcement,
+            completeness=completeness,
+        )

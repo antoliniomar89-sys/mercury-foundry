@@ -17,7 +17,7 @@ from mercury_foundry.agents.builder import Builder
 from mercury_foundry.agents.evaluator import Evaluator
 from mercury_foundry.ai.errors import ProviderExecutionError
 from mercury_foundry.audit.logger import log_action
-from mercury_foundry.policy.errors import LiteralConstraintViolationError
+from mercury_foundry.policy.errors import BuildIncompleteError, LiteralConstraintViolationError
 from mercury_foundry.policy.literal_constraints import LiteralConstraints, verify_literal_constraints
 from mercury_foundry.state import models
 
@@ -134,6 +134,42 @@ class ExecutionLoop:
                 )
                 # Fail-closed: nessuna scrittura è avvenuta in sandbox; niente da
                 # correggere con un altro tentativo automatico, serve intervento umano.
+                return TaskOutcome(task_id=task_id, status="blocked", attempts_used=attempt_number)
+            except BuildIncompleteError as exc:
+                # La chiamata al provider È avvenuta con successo: va comunque
+                # registrata in provider_calls. Il blocco qui è del gate di
+                # completezza del motore (non l'enforcement dei literal_constraints
+                # sopra): la proposta non ha prodotto tutto ciò che serve per un
+                # BUILD atomico (es. manca un file richiesto), quindi TEST non deve
+                # nemmeno partire su uno stato a metà — nessun retry automatico,
+                # nessuna scrittura in sandbox.
+                _persist_call_record(
+                    self.conn,
+                    goal_id=goal_id,
+                    task_id=task_id,
+                    attempt_id=attempt_id,
+                    record=self.builder.ai_provider.last_call_record,
+                )
+                log_action(
+                    self.conn,
+                    entity_type="attempt",
+                    entity_id=attempt_id,
+                    action="BUILD_INCOMPLETE_BLOCKED",
+                    actor="system",
+                    payload={"attempt_number": attempt_number, "reason": str(exc)},
+                )
+                models.update_attempt(
+                    self.conn, attempt_id, phase="BLOCKED", status="failure", close=True
+                )
+                models.update_task_status(self.conn, task_id, "blocked")
+                log_action(
+                    self.conn,
+                    entity_type="task",
+                    entity_id=task_id,
+                    action="TASK_BLOCKED",
+                    actor="system",
+                    payload={"reason": "build_incomplete", "message": str(exc)},
+                )
                 return TaskOutcome(task_id=task_id, status="blocked", attempts_used=attempt_number)
             except ProviderExecutionError as exc:
                 _persist_call_record(

@@ -14,3 +14,17 @@ class LiteralConstraintViolationError(RuntimeError):
     """La proposta del provider diverge da un literal_constraint e la
     correzione deterministica non è possibile (manca percorso o contenuto
     completi): blocco fail-closed prima di qualunque scrittura in sandbox."""
+
+
+class BuildIncompleteError(RuntimeError):
+    """La `PatchProposal` (già eventualmente corretta dall'enforcement dei
+    literal_constraints) non è completa rispetto a ciò che il goal richiede
+    — es. manca uno o più `required_files`, o la proposta non contiene
+    alcun file da scrivere.
+
+    Distinta da `LiteralConstraintViolationError`: qui il contenuto proposto
+    non diverge da un vincolo letterale conosciuto, semplicemente la BUILD
+    non ha prodotto tutto ciò che serve per poter eseguire un TEST
+    significativo. Bloccata PRIMA di qualunque scrittura in sandbox e PRIMA
+    che TEST possa partire — non consuma un tentativo di FIX/retry
+    automatico, richiede intervento umano sul piano/provider."""

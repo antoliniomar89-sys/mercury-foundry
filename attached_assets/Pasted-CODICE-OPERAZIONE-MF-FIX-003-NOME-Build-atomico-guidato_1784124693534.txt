@@ -1,0 +1,139 @@
+CODICE OPERAZIONE: MF-FIX-003
+NOME: Build atomico guidato dai vincoli e piano eseguibile
+
+Non effettuare chiamate reali al provider.
+Non approvare o promuovere alcun candidato precedente.
+Non modificare manualmente i file finali del probe.
+
+CONTESTO
+
+MF-RUN-002 ha fallito in modalità fail-closed.
+
+Risultato osservato:
+
+- i literal_constraints hanno corretto deterministicamente il contenuto di MERCURY_FOUNDRY_PROBE.md;
+- il modello ha prodotto un piano di 7 task;
+- la creazione dei due file obbligatori era distribuita su task diversi;
+- l’ExecutionLoop ha eseguito soltanto il primo task BUILD;
+- il file di test non era ancora presente quando è partita la fase TEST;
+- pytest ha quindi restituito “no tests ran”;
+- un FIX avrebbe richiesto una terza chiamata, correttamente bloccata dal limite;
+- nessun candidato è stato creato o approvato.
+
+PROBLEMA ARCHITETTURALE
+
+Il sistema non deve interpretare ogni voce narrativa del piano come un ciclo autonomo:
+
+BUILD → TEST
+
+quando la specifica richiede un insieme atomico di file e condizioni che devono esistere contemporaneamente prima della verifica.
+
+I literal_constraints rappresentano il contratto finale della submission e devono determinare la completezza minima del BUILD.
+
+OBIETTIVO
+
+Rendere il BUILD atomico e constraint-driven:
+
+- tutte le operazioni necessarie a soddisfare i literal_constraints devono essere raccolte;
+- applicate nella stessa sandbox;
+- verificate strutturalmente;
+- solo dopo deve partire TEST.
+
+REQUISITI
+
+1. Introduci una distinzione esplicita tra:
+
+   - reasoning_steps: passi descrittivi o analitici del piano;
+   - build_operations: operazioni concrete applicabili;
+   - verification_steps: verifiche da eseguire dopo il BUILD.
+
+2. Le voci come:
+   - analizzare;
+   - comprendere;
+   - verificare requisiti;
+   - preparare;
+   - pianificare;
+
+   non devono generare da sole un ciclo BUILD → TEST.
+
+3. Prima di TEST, il motore deve calcolare la build completeness rispetto a:
+
+   - exact_file_path;
+   - exact_file_content;
+   - allowed_files;
+   - file obbligatori;
+   - exact_test_command;
+   - byte_exact_required.
+
+4. Se mancano operazioni indispensabili:
+
+   - non avviare TEST;
+   - non consumare un tentativo di test;
+   - non richiedere automaticamente un FIX;
+   - completare prima tutte le build_operations già previste dal piano.
+
+5. Quando i literal_constraints forniscono integralmente percorso e contenuto, il motore può materializzare deterministicamente quei file nel BUILD atomico senza richiedere al modello di rigenerarne il contenuto.
+
+6. Il provider può proporre struttura e razionale, ma non deve essere necessaria una chiamata separata per ogni file letterale già completamente definito.
+
+7. La fase TEST può partire solo quando:
+
+   - tutti i file obbligatori esistono nella sandbox;
+   - nessun file vietato è presente;
+   - i contenuti letterali risultano già conformi;
+   - il comando di test è disponibile.
+
+8. Se il piano del provider distribuisce i file obbligatori tra più task, l’orchestratore deve aggregare le relative operazioni in un unico BUILD transactionale.
+
+9. In caso di errore durante il BUILD atomico:
+
+   - rollback dell’intero tentativo;
+   - nessuno stato parzialmente valido deve essere trattato come candidato;
+   - audit completo dell’errore.
+
+10. Non aumentare il numero predefinito di chiamate reali.
+11. Non indebolire test, sandbox, budget, audit o gate umano.
+12. Non aggiungere logica specifica ai nomi dei file del probe.
+
+STATO DEL PROBE PRECEDENTE
+
+1. Verifica quali file MF-RUN-002 ha lasciato in target_project.
+2. Non considerarli approvati.
+3. Durante i test usa sandbox temporanee.
+4. Non pulire o alterare target_project senza riportare esattamente l’azione prevista.
+
+TEST RICHIESTI
+
+Aggiungi test mockati per:
+
+- piano con reasoning_steps prima delle operazioni concrete;
+- due file obbligatori distribuiti su più task;
+- aggregazione in un BUILD atomico;
+- nessun TEST prima della build completeness;
+- materializzazione deterministica di più file letterali;
+- nessuna chiamata provider aggiuntiva per contenuti già definiti;
+- rollback in caso di BUILD parziale;
+- blocco di file extra;
+- comando di test eseguito una sola volta dopo la completezza;
+- successo end-to-end con massimo due chiamate provider:
+  1. PLAN;
+  2. BUILD/PATCH;
+- candidato finale pending_review;
+- nessuna approvazione automatica;
+- regressione completa della suite.
+
+DOPO L’IMPLEMENTAZIONE
+
+1. Esegui tutta la suite di test.
+2. Non effettuare chiamate reali.
+3. Riporta:
+   - numero totale dei test;
+   - file sorgente modificati;
+   - stato attuale di target_project;
+   - nuova struttura del piano;
+   - regola di build completeness;
+   - esempio mockato di aggregazione dei task;
+   - dimostrazione end-to-end con due sole chiamate;
+   - conferma del gate umano;
+   - comando previsto per MF-RUN-003.
+4. Non eseguire MF-RUN-003.
