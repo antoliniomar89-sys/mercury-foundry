@@ -1,0 +1,91 @@
+CODICE OPERAZIONE: MF-RUN-002
+NOME: Probe reale con vincoli letterali deterministici
+
+Esegui un solo run reale controllato di Mercury Foundry usando il file:
+
+probe_constraints.json
+
+Non implementare direttamente i file richiesti.
+Usa esclusivamente la CLI e il workflow reale della Foundry.
+
+PRIMA DEL RUN
+
+1. Verifica che target_project sia vuoto.
+2. Esegui doctor in modalità provider reale.
+3. Procedi solo se lo stato finale è READY_REAL.
+4. Mostra il comando CLI esatto prima di eseguirlo.
+5. Conferma i limiti configurati:
+   - massimo 2 chiamate reali;
+   - massimo 2 tentativi;
+   - massimo 2.000 token totali;
+   - costo massimo 0,01 USD.
+
+COMANDO PREVISTO
+
+python3 -m mercury_foundry.cli --provider openai submit "crea il probe reale con i due file richiesti" --literal-constraints probe_constraints.json
+
+REQUISITI
+
+1. Attraversa il workflow reale:
+
+SPEC → PLAN → BUILD → TEST → FIX se necessario → VERIFY → CANDIDATE
+
+2. Usa il provider OpenAI reale e il secret OPENAI_API_KEY.
+
+3. I literal_constraints presenti in probe_constraints.json sono ground truth deterministica e prevalgono su qualsiasi variazione proposta dal modello.
+
+4. Devono esistere esclusivamente questi due file persistenti dentro target_project:
+
+- MERCURY_FOUNDRY_PROBE.md
+- test_mercury_foundry_probe.py
+
+5. Il contenuto di MERCURY_FOUNDRY_PROBE.md deve corrispondere esattamente, byte per byte, al contenuto definito in probe_constraints.json.
+
+6. Non devono essere lasciati:
+   - file aggiuntivi;
+   - directory cache;
+   - file .pyc;
+   - virgolette extra;
+   - newline o spazi non previsti.
+
+7. Esegui esclusivamente il comando di test esatto definito nei literal_constraints.
+
+8. Registra una sola riga provider_calls per ogni chiamata realmente effettuata, incluse planning e patch generation.
+
+9. Mantieni:
+   - sandbox;
+   - audit append-only;
+   - limiti di costo e token;
+   - fail-closed;
+   - gate umano obbligatorio.
+
+10. Non approvare, promuovere o applicare automaticamente il candidato.
+
+REPORT FINALE
+
+Riporta:
+
+- codice operazione MF-RUN-002;
+- stato doctor;
+- run_id;
+- stato del run;
+- stato del candidato;
+- provider e modello;
+- is_simulated;
+- numero di chiamate reali;
+- numero di tentativi;
+- token input, output e totali;
+- costo per chiamata e costo totale;
+- file esatti creati, modificati o eliminati;
+- contenuto finale esatto del file Markdown;
+- verifica byte-per-byte;
+- risultato dei test;
+- risultato del controllo sui file extra;
+- record provider_calls;
+- prove di audit;
+- conferma che il candidato sia ancora bloccato al gate umano.
+
+Se qualunque requisito fallisce, fermati in modalità fail-closed.
+
+Non effettuare altre chiamate reali dopo questo run.
+Non approvare il candidato.
