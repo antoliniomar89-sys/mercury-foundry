@@ -134,9 +134,11 @@ def run_doctor(
     mission_ok = _check_mission_layer(report, db_path)      # MF-MISSION-001
     replication_ok = _check_replication_layer(report, db_path)  # MF-REPL-001
     outcome_ok = _check_outcome_layer(report, db_path)          # MF-OUTCOME-001
+    verification_ok = _check_verification_layer(report)         # MF-VERIFY-001
 
     report.overall_status = _compute_overall_status(
-        report, provider_is_simulated, autonomy_ok, mission_ok, replication_ok, outcome_ok
+        report, provider_is_simulated, autonomy_ok, mission_ok,
+        replication_ok, outcome_ok, verification_ok
     )
     return report
 
@@ -1126,6 +1128,29 @@ def _check_outcome_layer(
     return not any(c.status == STATUS_ERROR for c in outcome_checks)
 
 
+def _check_verification_layer(report: DoctorReport) -> bool:
+    """Check MF-VERIFY-001 — Adaptive Verification and Development Cost Governor."""
+    from mercury_foundry import config as _cfg
+    try:
+        from mercury_foundry.verification.diagnostics import run_verification_checks
+    except ImportError as e:
+        report.add(
+            "verification_layer",
+            STATUS_WARN,
+            f"MF-VERIFY-001 non importabile: {e}",
+        )
+        return False
+
+    results = run_verification_checks(_cfg.BASE_DIR)
+    all_ok = True
+    for r in results:
+        status = STATUS_OK if r.ok else STATUS_WARN
+        if not r.ok:
+            all_ok = False
+        report.add(r.name, status, r.message)
+    return all_ok
+
+
 def _compute_overall_status(
     report: DoctorReport,
     provider_is_simulated: bool | None,
@@ -1133,12 +1158,13 @@ def _compute_overall_status(
     mission_ok: bool = False,
     replication_ok: bool = False,
     outcome_ok: bool = False,
+    verification_ok: bool = False,
 ) -> str:
     if report.has_errors():
         return OVERALL_NOT_READY
     if provider_is_simulated is None:
         return OVERALL_NOT_READY
-    # MF-OUTCOME-001: READY_OUTCOME_SHADOW è il livello più alto
+    # MF-OUTCOME-001: READY_OUTCOME_SHADOW è il livello più alto (anche se verify non ok)
     if autonomy_ok and mission_ok and replication_ok and outcome_ok:
         return OVERALL_READY_OUTCOME_SHADOW
     # MF-REPL-001: READY_REPLICATION_CONTRACT_SHADOW prevale su READY_MISSION_SHADOW

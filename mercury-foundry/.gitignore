@@ -1,0 +1,48 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Ambienti virtuali
+.venv/
+venv/
+env/
+.env
+
+# Test e coverage
+.pytest_cache/
+.coverage
+htmlcov/
+*.coverage
+
+# MF-VERIFY-001: cache locale dei risultati test (non committare)
+.verify_cache/
+
+# Dati locali Mercury Foundry
+data/
+*.db
+*.db-shm
+*.db-wal
+
+# Editor
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# uv / pip
+uv.lock
+*.lock
+
+# Temporanei
+*.tmp
+*.log
+tmp/
