@@ -410,6 +410,12 @@ def revoke_approval_incident(
             "revoke_approval_incident si applica solo a candidate approvate."
         )
 
+    # MF-FIX-007: leggi il goal PRIMA di qualsiasi DML, per usarlo nella
+    # transazione atomica finale (invariante goal/candidate).
+    goal_id = candidate["goal_id"]
+    goal = models.get_goal(conn, goal_id)
+    goal_was_done = (goal is not None and goal["status"] == "done")
+
     manifest = json.loads(candidate["manifest_json"]) if candidate["manifest_json"] else {}
     final_hashes: dict = manifest.get("files", {}).get("final_hashes", {})
     final_sizes: dict = manifest.get("files", {}).get("final_sizes", {})
@@ -469,6 +475,8 @@ def revoke_approval_incident(
         (resolved_target_root / rel_path).unlink()
 
     # Aggiorna stato candidate e registra decisione + audit nella stessa transazione.
+    # MF-FIX-007: tutta la sezione DB (candidate + decision + audit + eventuale goal)
+    # è in un'unica transazione atomica: o tutto viene committato o nulla.
     models.update_candidate_status_no_commit(conn, candidate_id, "approval_revoked")
     models.create_decision_no_commit(
         conn,
@@ -496,6 +504,27 @@ def revoke_approval_incident(
         },
         commit=False,
     )
+
+    # MF-FIX-007 — invariante goal/candidate: un goal non può restare DONE
+    # se la sua candidate approvata viene revocata. Se il goal era 'done',
+    # lo riportiamo ad 'awaiting_approval' (stato già esistente nella state
+    # machine) nella stessa transazione atomica.
+    if goal_was_done:
+        models.update_goal_status_no_commit(conn, goal_id, "awaiting_approval")
+        log_action(
+            conn,
+            entity_type="goal",
+            entity_id=goal_id,
+            action="GOAL_AWAITING_APPROVAL_REVERTED_AFTER_REVOKE",
+            actor="system",
+            payload={
+                "candidate_id": candidate_id,
+                "rationale": rationale,
+                "previous_goal_status": "done",
+            },
+            commit=False,
+        )
+
     conn.commit()
 
 

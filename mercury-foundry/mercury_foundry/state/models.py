@@ -30,6 +30,15 @@ def update_goal_status(conn: sqlite3.Connection, goal_id: int, status: str) -> N
     conn.commit()
 
 
+def update_goal_status_no_commit(conn: sqlite3.Connection, goal_id: int, status: str) -> None:
+    """Come `update_goal_status`, ma SENZA commit.
+
+    MF-FIX-007: usata da `revoke_approval_incident` per partecipare alla
+    singola transazione atomica candidate + goal, così il DB non può mai
+    trovarsi in uno stato inconsistente (goal DONE con candidate REVOKED)."""
+    conn.execute("UPDATE goals SET status = ? WHERE id = ?", (status, goal_id))
+
+
 def get_goal(conn: sqlite3.Connection, goal_id: int) -> sqlite3.Row | None:
     return conn.execute("SELECT * FROM goals WHERE id = ?", (goal_id,)).fetchone()
 

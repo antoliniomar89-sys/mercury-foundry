@@ -153,3 +153,10 @@ CREATE TABLE IF NOT EXISTS audit_log (
     payload_json TEXT,
     created_at TEXT NOT NULL
 );
+
+-- MF-FIX-007: trigger BEFORE UPDATE e BEFORE DELETE su audit_log sono installati
+-- via migrazione in `state.db._migrate_audit_log_triggers`, NON qui.
+-- Motivo: `conn.executescript()` divide il testo sulle `;` anche dentro i blocchi
+-- BEGIN…END dei trigger, producendo SQL malformato. I trigger vengono creati con
+-- chiamate `conn.execute()` singole nella funzione di migrazione dedicata, che è
+-- idempotente (IF NOT EXISTS) e gira sia su DB nuovi sia su DB pre-esistenti.

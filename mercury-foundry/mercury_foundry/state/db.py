@@ -27,6 +27,7 @@ def init_schema(conn: sqlite3.Connection) -> None:
     _migrate_goals_columns(conn)
     _migrate_candidates_columns(conn)
     _migrate_candidates_approval_revoked(conn)
+    _migrate_audit_log_triggers(conn)
 
 
 def _migrate_provider_calls_columns(conn: sqlite3.Connection) -> None:
@@ -64,6 +65,46 @@ def _migrate_goals_columns(conn: sqlite3.Connection) -> None:
     existing_columns = {row["name"] for row in conn.execute("PRAGMA table_info(goals)").fetchall()}
     if "literal_constraints_json" not in existing_columns:
         conn.execute("ALTER TABLE goals ADD COLUMN literal_constraints_json TEXT")
+    conn.commit()
+
+
+def _migrate_audit_log_triggers(conn: sqlite3.Connection) -> None:
+    """MF-FIX-007: installa trigger BEFORE UPDATE e BEFORE DELETE su `audit_log`.
+
+    Rende l'append-only-ness dell'audit log un vincolo a livello DB, non solo
+    una convenzione applicativa. I trigger usano RAISE(FAIL, ...) per bloccare
+    qualsiasi UPDATE o DELETE con un messaggio di errore esplicito.
+
+    Non viene usato `schema.sql` per questi trigger perché `conn.executescript()`
+    divide il testo su ogni `;` — anche quelli dentro i blocchi BEGIN…END —
+    producendo SQL malformato. `conn.execute()` singola gestisce correttamente
+    la struttura multi-statement del trigger.
+
+    La funzione è IDEMPOTENTE: `IF NOT EXISTS` garantisce che una seconda
+    esecuzione non generi errori né duplica i trigger."""
+    # RAISE(ABORT, ...) annulla l'istruzione corrente e solleva
+    # sqlite3.OperationalError in Python — semanticamente corretta per
+    # "operazione non permessa su questa tabella". RAISE(FAIL, ...) invece
+    # solleva sqlite3.IntegrityError, che è meno intuitivo per un blocco
+    # operativo (non è una violazione di integrità referenziale).
+    conn.execute(
+        """
+        CREATE TRIGGER IF NOT EXISTS audit_log_no_update
+            BEFORE UPDATE ON audit_log
+        BEGIN
+            SELECT RAISE(ABORT, 'audit_log is append-only: UPDATE is not permitted (MF-FIX-007)');
+        END
+        """
+    )
+    conn.execute(
+        """
+        CREATE TRIGGER IF NOT EXISTS audit_log_no_delete
+            BEFORE DELETE ON audit_log
+        BEGIN
+            SELECT RAISE(ABORT, 'audit_log is append-only: DELETE is not permitted (MF-FIX-007)');
+        END
+        """
+    )
     conn.commit()
 
 
