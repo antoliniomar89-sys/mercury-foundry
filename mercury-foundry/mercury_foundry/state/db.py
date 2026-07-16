@@ -33,6 +33,43 @@ def init_schema(conn: sqlite3.Connection) -> None:
     # creato le tabelle organs/decision_mandates tramite schema.sql.
     from mercury_foundry.autonomy.seed import seed_foundry_governance  # lazy import: evita circolarità
     seed_foundry_governance(conn)
+    # MF-MISSION-001: seeding idempotente di MISSION_CONTROL con i 9 mandati
+    # iniziali. Va eseguito DOPO seed_foundry_governance (dipende dalla tabella
+    # organs già popolata e da decision_mandates già presente).
+    _migrate_mission_indexes(conn)
+    from mercury_foundry.mission.seed import seed_mission_control  # lazy import
+    seed_mission_control(conn)
+
+
+def _migrate_mission_indexes(conn: sqlite3.Connection) -> None:
+    """Crea indici idempotenti per le tabelle Mission (MF-MISSION-001).
+
+    Le tabelle missions/mission_transitions sono create da schema.sql via
+    CREATE TABLE IF NOT EXISTS (idempotente). Gli indici aggiuntivi vengono
+    creati qui perché schema.sql non supporta trigger (stessa convenzione
+    adottata per audit_log_triggers).
+    """
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_missions_status "
+        "ON missions(status)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_missions_origin_type "
+        "ON missions(origin_type)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_missions_business_scope "
+        "ON missions(business_scope)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_missions_correlation_id "
+        "ON missions(correlation_id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_mission_transitions_mission_id "
+        "ON mission_transitions(mission_id)"
+    )
+    conn.commit()
 
 
 def _migrate_provider_calls_columns(conn: sqlite3.Connection) -> None:

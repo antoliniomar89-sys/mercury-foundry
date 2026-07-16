@@ -2,6 +2,7 @@
 
 from mercury_foundry.diagnostics import (
     OVERALL_NOT_READY,
+    OVERALL_READY_MISSION_SHADOW,
     OVERALL_READY_REAL,
     OVERALL_READY_SHADOW,
     OVERALL_READY_SIMULATED,
@@ -16,9 +17,9 @@ def test_doctor_healthy_simulated_mode_reports_ready_simulated(tmp_path):
         provider_name="fake",
     )
 
-    # MF-ARCH-008: il doctor restituisce READY_SHADOW quando l'Autonomy
-    # Boundary Layer è correttamente inizializzato (default dopo MF-ARCH-008).
-    assert report.overall_status == OVERALL_READY_SHADOW
+    # MF-MISSION-001: il doctor restituisce READY_MISSION_SHADOW quando sia
+    # l'Autonomy Boundary Layer sia il Mission Layer sono inizializzati.
+    assert report.overall_status == OVERALL_READY_MISSION_SHADOW
     assert not report.has_errors()
 
     names = {c.name for c in report.checks}
@@ -118,9 +119,9 @@ def test_doctor_real_provider_fully_configured_is_ready_real(tmp_path, monkeypat
         provider_name="openai",
     )
 
-    # MF-ARCH-008: READY_SHADOW prevale su READY_REAL quando l'Autonomy
-    # Boundary Layer è attivo, indipendentemente dal tipo di provider.
-    assert report.overall_status == OVERALL_READY_SHADOW
+    # MF-MISSION-001: READY_MISSION_SHADOW prevale su READY_REAL/READY_SHADOW
+    # quando sia Autonomy Layer sia Mission Layer sono attivi.
+    assert report.overall_status == OVERALL_READY_MISSION_SHADOW
     provider_check = next(c for c in report.checks if c.name == "ai_provider")
     assert provider_check.status == "ok"
     assert "sk-test-doctor-check" not in provider_check.detail

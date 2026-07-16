@@ -53,7 +53,14 @@ STATUS_ERROR = "error"
 OVERALL_READY_SIMULATED = "READY_SIMULATED"
 OVERALL_READY_REAL = "READY_REAL"
 OVERALL_NOT_READY = "NOT_READY"
-OVERALL_READY_SHADOW = "READY_SHADOW"   # MF-ARCH-008: autonomy boundary attivo in shadow mode
+OVERALL_READY_SHADOW         = "READY_SHADOW"          # MF-ARCH-008: autonomy boundary attivo in shadow mode
+OVERALL_READY_MISSION_SHADOW = "READY_MISSION_SHADOW"  # MF-MISSION-001: mission layer attivo in shadow mode
+
+# MF-MISSION-001: tabelle del Mission Layer
+MISSION_TABLES = {
+    "missions",
+    "mission_transitions",
+}
 
 
 @dataclass
@@ -101,8 +108,11 @@ def run_doctor(
     _check_approval_gate(report)
     _check_audit_log_module(report)
     autonomy_ok = _check_autonomy_boundary(report, db_path)
+    mission_ok = _check_mission_layer(report, db_path)  # MF-MISSION-001
 
-    report.overall_status = _compute_overall_status(report, provider_is_simulated, autonomy_ok)
+    report.overall_status = _compute_overall_status(
+        report, provider_is_simulated, autonomy_ok, mission_ok
+    )
     return report
 
 
@@ -437,17 +447,215 @@ def _check_autonomy_boundary(report: DoctorReport, db_path: Path | str | None) -
     return not any(c.status == STATUS_ERROR for c in autonomy_checks)
 
 
+def _check_mission_layer(
+    report: DoctorReport,
+    db_path: Path | str | None = None,
+) -> bool:
+    """MF-MISSION-001: verifica il Mission Layer."""
+    from mercury_foundry.mission.lifecycle import ALLOWED_TRANSITIONS, TERMINAL_STATUSES
+    from mercury_foundry.mission.capability_contracts import (
+        NullCapabilityProvider, NullKnowledgeProvider,
+        NullDiscoveryProvider, NullDeliveryProvider,
+    )
+    from mercury_foundry.mission.seed import MISSION_CONTROL_KEY, INITIAL_MANDATES
+    from mercury_foundry.autonomy.models import get_organ_by_key, list_mandates_for_organ
+
+    path = Path(db_path) if db_path is not None else config.DEFAULT_DB_PATH
+    if not path.exists():
+        report.add("mission_schema", STATUS_ERROR, "DB non trovato")
+        return False
+
+    conn = sqlite3.connect(str(path))
+    conn.row_factory = sqlite3.Row
+
+    # -- tabelle Mission presenti --
+    existing = {
+        row["name"]
+        for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()
+    }
+    missing_tables = MISSION_TABLES - existing
+    if missing_tables:
+        report.add(
+            "mission_schema",
+            STATUS_ERROR,
+            f"Tabelle Mission mancanti: {sorted(missing_tables)}",
+        )
+        conn.close()
+        return False
+    report.add("mission_schema", STATUS_OK, "Tabelle missions e mission_transitions presenti")
+
+    # -- indici presenti --
+    idx_names = {
+        row["name"]
+        for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='index' AND name LIKE 'idx_mission%'"
+        ).fetchall()
+    }
+    required_indexes = {
+        "idx_missions_status",
+        "idx_missions_origin_type",
+        "idx_missions_business_scope",
+        "idx_missions_correlation_id",
+        "idx_mission_transitions_mission_id",
+    }
+    missing_idx = required_indexes - idx_names
+    if missing_idx:
+        report.add(
+            "mission_indexes",
+            STATUS_WARNING,
+            f"Indici Mission mancanti: {sorted(missing_idx)}",
+        )
+    else:
+        report.add("mission_indexes", STATUS_OK, "Indici Mission presenti")
+
+    # -- UNIQUE constraint su idempotency_key --
+    idx_info = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='index' "
+        "AND tbl_name='missions' AND sql LIKE '%idempotency_key%'"
+    ).fetchone()
+    # La UNIQUE viene anche come indice automatico — controlla via PRAGMA
+    pragma = conn.execute("PRAGMA index_list(missions)").fetchall()
+    idem_unique = any("idempotency_key" in str(r["name"]) for r in pragma)
+    if not idem_unique:
+        # Verifica diretta via info_list
+        col_info = conn.execute("PRAGMA table_info(missions)").fetchall()
+        report.add(
+            "mission_idempotency_constraint",
+            STATUS_WARNING,
+            "Indice UNIQUE su idempotency_key non rilevato tramite PRAGMA index_list",
+        )
+    else:
+        report.add(
+            "mission_idempotency_constraint",
+            STATUS_OK,
+            "Vincolo UNIQUE su idempotency_key presente",
+        )
+
+    # -- MISSION_CONTROL organ presente --
+    organ = get_organ_by_key(conn, MISSION_CONTROL_KEY)
+    if organ is None:
+        report.add(
+            "mission_control_organ",
+            STATUS_ERROR,
+            f"Organo {MISSION_CONTROL_KEY!r} non trovato nel DB",
+        )
+        conn.close()
+        return False
+    report.add(
+        "mission_control_organ",
+        STATUS_OK,
+        f"Organo {MISSION_CONTROL_KEY!r} presente (id={organ['id']})",
+    )
+
+    # -- mandati MISSION_CONTROL presenti --
+    mandates = list_mandates_for_organ(conn, organ["id"])
+    mandate_types = {m["decision_type"] for m in mandates}
+    expected_types = {dt for dt, _ in INITIAL_MANDATES}
+    missing_mandates = expected_types - mandate_types
+    if missing_mandates:
+        report.add(
+            "mission_control_mandates",
+            STATUS_ERROR,
+            f"Mandati MISSION_CONTROL mancanti: {sorted(missing_mandates)}",
+        )
+        conn.close()
+        return False
+    report.add(
+        "mission_control_mandates",
+        STATUS_OK,
+        f"Tutti i {len(expected_types)} mandati MISSION_CONTROL presenti",
+    )
+
+    # -- state machine valida (no transizioni illegali in TERMINAL_STATUSES) --
+    invalid_from_terminal = [
+        s for s in TERMINAL_STATUSES
+        if ALLOWED_TRANSITIONS.get(s, frozenset())
+    ]
+    if invalid_from_terminal:
+        report.add(
+            "mission_state_machine",
+            STATUS_ERROR,
+            f"Transizioni uscenti da stati terminali: {invalid_from_terminal}",
+        )
+        conn.close()
+        return False
+    report.add(
+        "mission_state_machine",
+        STATUS_OK,
+        f"State machine valida: {len(ALLOWED_TRANSITIONS)} stati, "
+        f"{len(TERMINAL_STATUSES)} terminali senza uscite",
+    )
+
+    # -- provider default caricabili --
+    try:
+        NullCapabilityProvider()
+        NullKnowledgeProvider()
+        NullDiscoveryProvider()
+        NullDeliveryProvider()
+        report.add("mission_null_providers", STATUS_OK, "Null providers caricabili")
+    except Exception as exc:
+        report.add("mission_null_providers", STATUS_ERROR, f"Null provider non caricabile: {exc}")
+        conn.close()
+        return False
+
+    # -- expedition contract disponibile --
+    try:
+        from mercury_foundry.mission.expedition import ExpeditionRequest, ExpeditionReadinessResult
+        report.add(
+            "mission_expedition_contract",
+            STATUS_OK,
+            "ExpeditionRequest e ExpeditionReadinessResult importabili",
+        )
+    except Exception as exc:
+        report.add(
+            "mission_expedition_contract",
+            STATUS_ERROR,
+            f"Expedition contract non importabile: {exc}",
+        )
+        conn.close()
+        return False
+
+    # -- runtime non esecutivo (MISSION_PROMOTE_TO_BUSINESS_CELL forbidden) --
+    promote_mandate = next(
+        (m for m in mandates if m["decision_type"] == "MISSION_PROMOTE_TO_BUSINESS_CELL"),
+        None,
+    )
+    if promote_mandate and promote_mandate["authority_mode"] == "forbidden":
+        report.add(
+            "mission_runtime_not_executive",
+            STATUS_OK,
+            "MISSION_PROMOTE_TO_BUSINESS_CELL è forbidden: nessuna Business Cell creata in V0",
+        )
+    else:
+        report.add(
+            "mission_runtime_not_executive",
+            STATUS_WARNING,
+            "MISSION_PROMOTE_TO_BUSINESS_CELL non è forbidden: verificare configurazione",
+        )
+
+    conn.close()
+
+    mission_checks = [c for c in report.checks if c.name.startswith("mission_")]
+    return not any(c.status == STATUS_ERROR for c in mission_checks)
+
+
 def _compute_overall_status(
     report: DoctorReport,
     provider_is_simulated: bool | None,
     autonomy_ok: bool = False,
+    mission_ok: bool = False,
 ) -> str:
     if report.has_errors():
         return OVERALL_NOT_READY
     if provider_is_simulated is None:
         return OVERALL_NOT_READY
+    # MF-MISSION-001: READY_MISSION_SHADOW prevale su READY_SHADOW quando il
+    # Mission Layer è correttamente inizializzato.
+    if autonomy_ok and mission_ok:
+        return OVERALL_READY_MISSION_SHADOW
     # MF-ARCH-008: READY_SHADOW prevale su READY_SIMULATED/READY_REAL
-    # quando l'Autonomy Boundary Layer è correttamente inizializzato.
     if autonomy_ok:
         return OVERALL_READY_SHADOW
     return OVERALL_READY_SIMULATED if provider_is_simulated else OVERALL_READY_REAL

@@ -216,6 +216,69 @@ CREATE TABLE IF NOT EXISTS organ_events (
     consumed_at      TEXT
 );
 
+-- ===========================================================================
+-- MF-MISSION-001: Mission Layer V0
+-- ===========================================================================
+
+-- Mandati strutturati orientati a un outcome economico o operativo.
+-- Non sono task, goal, esperimenti o Business Cell.
+CREATE TABLE IF NOT EXISTS missions (
+    id                          INTEGER PRIMARY KEY AUTOINCREMENT,
+    mission_id                  TEXT NOT NULL UNIQUE,   -- UUID (riferimento esterno)
+    idempotency_key             TEXT NOT NULL UNIQUE,
+    correlation_id              TEXT NOT NULL,
+    title                       TEXT NOT NULL,
+    description                 TEXT NOT NULL,
+    origin_type                 TEXT NOT NULL,          -- OriginType enum
+    origin_ref                  TEXT,
+    mission_type                TEXT NOT NULL,          -- MissionType enum
+    status                      TEXT NOT NULL DEFAULT 'draft',
+    priority                    TEXT NOT NULL DEFAULT 'normal',
+    objective                   TEXT NOT NULL,
+    expected_outcomes_json      TEXT NOT NULL DEFAULT '[]',
+    success_criteria_json       TEXT NOT NULL DEFAULT '[]',
+    termination_criteria_json   TEXT NOT NULL DEFAULT '[]',
+    constraints_json            TEXT NOT NULL DEFAULT '{}',
+    budget_json                 TEXT NOT NULL DEFAULT '{}',
+    risk_profile_json           TEXT NOT NULL DEFAULT '{}',
+    authority_request_json      TEXT NOT NULL DEFAULT '{}',
+    required_capabilities_json  TEXT NOT NULL DEFAULT '[]',
+    knowledge_scope             TEXT NOT NULL DEFAULT 'mission_local',
+    business_scope              TEXT NOT NULL DEFAULT 'exploration',
+    deadline                    TEXT,
+    parent_mission_id           TEXT REFERENCES missions(mission_id),
+    candidate_business_cell_id  TEXT,
+    constitutional_version      TEXT NOT NULL,
+    created_by                  TEXT NOT NULL,
+    assigned_organ_id           INTEGER REFERENCES organs(id),
+    created_at                  TEXT NOT NULL,
+    updated_at                  TEXT NOT NULL,
+    accepted_at                 TEXT,
+    activated_at                TEXT,
+    completed_at                TEXT,
+    terminated_at               TEXT,
+    version                     INTEGER NOT NULL DEFAULT 1,
+    metadata_json               TEXT NOT NULL DEFAULT '{}'
+);
+
+-- Log immutabile delle transizioni di stato di ogni Mission.
+CREATE TABLE IF NOT EXISTS mission_transitions (
+    id                           INTEGER PRIMARY KEY AUTOINCREMENT,
+    transition_id                TEXT NOT NULL UNIQUE,  -- UUID
+    mission_id                   TEXT NOT NULL REFERENCES missions(mission_id),
+    from_status                  TEXT NOT NULL,
+    to_status                    TEXT NOT NULL,
+    requested_by                 TEXT NOT NULL,
+    requested_at                 TEXT NOT NULL,
+    authorized_by                TEXT,
+    reason                       TEXT NOT NULL,
+    evidence_refs_json           TEXT NOT NULL DEFAULT '[]',
+    authority_decision_id        TEXT,
+    constitutional_validation_id TEXT,
+    correlation_id               TEXT NOT NULL,
+    metadata_json                TEXT NOT NULL DEFAULT '{}'
+);
+
 -- MF-FIX-007: trigger BEFORE UPDATE e BEFORE DELETE su audit_log sono installati
 -- via migrazione in `state.db._migrate_audit_log_triggers`, NON qui.
 -- Motivo: `conn.executescript()` divide il testo sulle `;` anche dentro i blocchi
