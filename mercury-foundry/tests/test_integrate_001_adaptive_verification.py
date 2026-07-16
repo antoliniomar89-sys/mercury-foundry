@@ -327,7 +327,12 @@ def test_05_verif_runner_executes_old_runner_not_called_twice(tmp_path, monkeypa
             eval_call_count[0] += 1
             return EvalResult(passed=True, output="1 passed", duration_ms=10)
 
-    vr = VerificationRunner()
+    # cache_dir isolata per-test: impedisce che test precedenti (es. test_02,
+    # che usa gli stessi file) lascino un cache-hit valido che bypassa
+    # l'Evaluator, annullando il conteggio. La TestResultCache usa per default
+    # config.BASE_DIR/.verify_cache/ — una directory CONDIVISA tra tutti i
+    # test della stessa session — ed è la causa pre-esistente del count=0.
+    vr = VerificationRunner(cache_dir=tmp_path / "verify_cache")
     conn = db.connect(tmp_path / "mf.db")
 
     # Usa file mappati (execution/loop.py) per garantire che la selezione adattiva
@@ -361,6 +366,250 @@ def test_05_verif_runner_executes_old_runner_not_called_twice(tmp_path, monkeypa
     # (per il run adattivo), non 2 (adaptive + legacy).
     assert eval_call_count[0] == 1, (
         f"Evaluator deve essere chiamato esattamente 1 volta, chiamato {eval_call_count[0]}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# TEST 5b/5c/5d/5e — Semantica changed_files in VerificationRunner.plan()
+#
+# Questi test verificano il comportamento di VerificationRunner.plan() chiamato
+# DIRETTAMENTE, non attraverso il loop. Non coprono il bug in loop.py
+# (_run_adaptive_test), che convertiva [] → None prima di chiamare vr.plan().
+# Il test discriminante per quel bug è test_05f (end-to-end attraverso il loop).
+#
+# Coprono il comportamento stabile di vr.plan():
+#   - changed_files=None  → analyze_git_diff() chiamata (comportamento legacy)
+#   - changed_files=[]    → analyze([]) chiamata, NON analyze_git_diff
+#   - changed_files=[...] → analyze([...]) chiamata invariata
+# ---------------------------------------------------------------------------
+
+def test_05b_plan_none_calls_analyze_git_diff(monkeypatch):
+    """vr.plan(changed_files=None) deve chiamare analyze_git_diff (non il percorso analyze diretto).
+
+    Nota: analyze_git_diff chiama internamente self.analyze() — il test verifica solo
+    il punto di ingresso corretto (analyze_git_diff), non l'assenza di chiamate a analyze.
+    """
+    git_diff_calls = []
+
+    original_git = ChangeImpactAnalyzer.analyze_git_diff
+
+    def recording_git_diff(self, **kwargs):
+        git_diff_calls.append(True)
+        return original_git(self, **kwargs)
+
+    monkeypatch.setattr(ChangeImpactAnalyzer, "analyze_git_diff", recording_git_diff)
+
+    vr = VerificationRunner()
+    vr.plan(changed_files=None)
+
+    assert len(git_diff_calls) == 1, "None deve chiamare analyze_git_diff esattamente una volta"
+
+
+def test_05c_plan_empty_list_calls_analyze_not_git_diff(monkeypatch):
+    """vr.plan(changed_files=[]) deve chiamare analyze([]), NON analyze_git_diff.
+
+    Questo è il comportamento corretto dopo il fix MF-VERIFY-002:
+    una lista vuota è una scelta esplicita dell'utente (nessun file modificato
+    rilevato), non un'assenza di informazione — non deve degradare a git_diff.
+    """
+    git_diff_calls = []
+    analyze_calls = []
+
+    original_git = ChangeImpactAnalyzer.analyze_git_diff
+    original_analyze = ChangeImpactAnalyzer.analyze
+
+    def recording_git_diff(self, **kwargs):
+        git_diff_calls.append(True)
+        return original_git(self, **kwargs)
+
+    def recording_analyze(self, changed_files):
+        analyze_calls.append(list(changed_files))
+        return original_analyze(self, changed_files)
+
+    monkeypatch.setattr(ChangeImpactAnalyzer, "analyze_git_diff", recording_git_diff)
+    monkeypatch.setattr(ChangeImpactAnalyzer, "analyze", recording_analyze)
+
+    vr = VerificationRunner()
+    vr.plan(changed_files=[])
+
+    assert len(git_diff_calls) == 0, (
+        "[] non deve chiamare analyze_git_diff — sarebbe il comportamento del bug pre-esistente"
+    )
+    assert len(analyze_calls) == 1, "[] deve chiamare analyze() esattamente una volta"
+    assert analyze_calls[0] == [], "analyze() deve ricevere [] come argomento"
+
+
+def test_05d_plan_nonempty_list_passed_unchanged(monkeypatch):
+    """vr.plan(changed_files=[...]) deve passare la lista invariata ad analyze()."""
+    analyze_calls = []
+
+    original_analyze = ChangeImpactAnalyzer.analyze
+
+    def recording_analyze(self, changed_files):
+        analyze_calls.append(list(changed_files))
+        return original_analyze(self, changed_files)
+
+    monkeypatch.setattr(ChangeImpactAnalyzer, "analyze", recording_analyze)
+
+    vr = VerificationRunner()
+    files = ["mercury_foundry/execution/loop.py", "mercury_foundry/ai/provider_factory.py"]
+    vr.plan(changed_files=files)
+
+    assert len(analyze_calls) == 1
+    assert analyze_calls[0] == files, (
+        f"La lista deve essere passata invariata: atteso {files}, ricevuto {analyze_calls[0]}"
+    )
+
+
+def test_05e_loop_passes_file_writes_not_none_to_plan(tmp_path, monkeypatch):
+    """_run_adaptive_test deve passare changed_files_for_verification a vr.plan
+    come lista (non come None), anche quando contiene file mappati.
+
+    Verifica che il loop non converta la lista in None prima di chiamare vr.plan.
+    """
+    plan_calls_changed_files = []
+
+    provider = _make_passing_provider(
+        files=[FileChange(path="mercury_foundry/execution/loop.py", content="# stub\n")],
+        test_files=[
+            FileChange(
+                path="tests/test_execution_loop_e2e_healthcheck.py",
+                content="def test_dummy(): pass\n",
+            )
+        ],
+    )
+    vr = VerificationRunner(cache_dir=tmp_path / "verify_cache")
+    original_plan = vr.plan
+
+    def capturing_plan(changed_files=None, **kwargs):
+        plan_calls_changed_files.append(changed_files)
+        return original_plan(changed_files=changed_files, **kwargs)
+
+    monkeypatch.setattr(vr, "plan", capturing_plan)
+
+    conn, loop = _build_loop(tmp_path, provider, verification_runner=vr)
+    _submit_and_run(conn, loop)
+
+    assert len(plan_calls_changed_files) >= 1, "vr.plan deve essere chiamato almeno una volta"
+    first_call = plan_calls_changed_files[0]
+    assert first_call is not None, (
+        "changed_files non deve essere convertito in None quando il builder ha scritto file"
+    )
+    assert isinstance(first_call, list), f"changed_files deve essere una lista, trovato {type(first_call)}"
+    assert len(first_call) > 0, "La lista non deve essere vuota se il builder ha scritto file"
+    assert "mercury_foundry/execution/loop.py" in first_call
+
+
+# ---------------------------------------------------------------------------
+# TEST 5f — DISCRIMINANTE end-to-end: file_writes=[] NON convertito in None
+#
+# MF-VERIFY-002: questo è il test che copre effettivamente il bug in loop.py.
+#
+# Bug pre-esistente in _run_adaptive_test (loop.py):
+#   changed_files if changed_files else None
+#   → [] è falsy → diventa None → vr.plan(changed_files=None)
+#   → analyze_git_diff() invece di analyze([])
+#
+# Fix corretto:
+#   changed_files if changed_files is not None else None
+#   → [] is not None → True → vr.plan(changed_files=[])
+#   → analyze([]) — semantica corretta
+#
+# Scenario: BuildResult.file_writes=[] (nessun file scritto dal builder) →
+# changed_files_for_verification=[] → _run_adaptive_test riceve [] →
+# vr.plan deve ricevere [] (non None).
+#
+# Il test fallisce con `if changed_files else None` e passa con
+# `if changed_files is not None else None`.
+# ---------------------------------------------------------------------------
+
+def test_05f_empty_file_writes_not_converted_to_none_in_loop(tmp_path, monkeypatch):
+    """DISCRIMINANTE: _run_adaptive_test passa changed_files=[] a vr.plan, NON None.
+
+    Esercita il percorso reale del loop — non chiama vr.plan() direttamente.
+    BuildResult.file_writes=[] → changed_files_for_verification=[] →
+    il loop deve passare [] a vr.plan invariato.
+
+    Fallirebbe ripristinando `changed_files if changed_files else None` in loop.py.
+    Passa con `changed_files if changed_files is not None else None`.
+    """
+    from mercury_foundry.agents.builder import BuildResult
+    from mercury_foundry.ai.provider import PatchProposal
+    from mercury_foundry.policy.literal_constraints import (
+        BuildCompletenessResult,
+        EnforcementReport,
+    )
+
+    # Cache isolata per-test: evita contaminazione da altri test della stessa session.
+    vr = VerificationRunner(cache_dir=tmp_path / "verify_cache")
+
+    provider = _make_passing_provider()
+    workspace = Workspace(tmp_path / "target")
+    builder = Builder(provider, workspace)
+    evaluator = Evaluator(TestRunner(workspace.root))
+    conn = db.connect(tmp_path / "mf.db")
+    loop = ExecutionLoop(
+        conn,
+        builder,
+        evaluator,
+        staging_base_dir=tmp_path / "staging",
+        verification_runner=vr,
+    )
+
+    # Monkeypatch builder.build per restituire file_writes=[] senza passare
+    # per il gate di completezza (che blocca correttamente le proposte vuote).
+    # L'obiettivo è isolare _run_adaptive_test e testare solo la conversione
+    # changed_files → argomento di vr.plan.
+    def build_with_empty_file_writes(
+        task_description, attempt_number, previous_failure,
+        literal_constraints=None, *, workspace=None,
+    ):
+        return BuildResult(
+            proposal=PatchProposal(
+                summary="zero file — test edge case empty file_writes",
+                files=[],
+                test_files=[],
+                provider_name="zero-fake",
+                is_simulated=True,
+            ),
+            file_writes=[],
+            enforcement=EnforcementReport(),
+            completeness=BuildCompletenessResult(complete=True, missing_files=[], reasons=[]),
+        )
+
+    monkeypatch.setattr(loop.builder, "build", build_with_empty_file_writes)
+
+    # Intercetta vr.plan per catturare il valore di changed_files ricevuto.
+    captured_changed_files: list = []
+    original_plan = vr.plan
+
+    def capturing_plan(changed_files=None, **kwargs):
+        captured_changed_files.append(changed_files)
+        return original_plan(changed_files=changed_files, **kwargs)
+
+    monkeypatch.setattr(vr, "plan", capturing_plan)
+
+    goal_id = models.create_goal(conn, "zero file edge case")
+    task_id = models.create_task(conn, goal_id, 0, "zero file edge case", assigned_to="builder")
+    task = models.get_task(conn, task_id)
+    loop.run_task(task)
+
+    assert len(captured_changed_files) >= 1, (
+        "vr.plan deve essere chiamato almeno una volta nel percorso adattivo"
+    )
+    captured = captured_changed_files[0]
+
+    # Asserzioni discriminanti:
+    # con il bug  → captured è None  → entrambe falliscono
+    # con il fix  → captured è []    → entrambe passano
+    assert captured is not None, (
+        "changed_files=[] non deve essere convertito in None da _run_adaptive_test.\n"
+        "Con il bug `if changed_files else None`: [] è falsy → None → analyze_git_diff().\n"
+        "Con il fix `if changed_files is not None else None`: [] → [] → analyze([])."
+    )
+    assert captured == [], (
+        f"changed_files vuoto deve arrivare a vr.plan come lista vuota [], "
+        f"ricevuto: {captured!r}"
     )
 
 

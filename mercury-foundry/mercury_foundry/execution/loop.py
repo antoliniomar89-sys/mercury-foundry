@@ -779,7 +779,7 @@ class ExecutionLoop:
         # ----------------------------------------------------------------
         try:
             plan = vr.plan(
-                changed_files=changed_files if changed_files else None,
+                changed_files=changed_files if changed_files is not None else None,
                 mission_id=mission_id,
             )
         except Exception as exc:  # noqa: BLE001
@@ -973,7 +973,7 @@ class ExecutionLoop:
                         "plan_id": plan.plan_id,
                     })
                     escalated_plan = vr.plan(
-                        changed_files=changed_files if changed_files else None,
+                        changed_files=changed_files if changed_files is not None else None,
                         force_level=escalation_level,
                         mission_id=mission_id,
                     )
