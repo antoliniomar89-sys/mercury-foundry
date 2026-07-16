@@ -22,8 +22,14 @@ from mercury_foundry.outcome.models import (
     OutcomeMetricSnapshot,
     OutcomePlanNotFoundError,
     OutcomeVersionConflict,
+    ReservationAlreadyConsumedError,
+    ReservationAlreadyReleasedError,
+    ReservationIdempotencyReplay,
+    ReservationNotFoundError,
+    ReservationStatus,
     ResourceConsumption,
     ResourceEnvelope,
+    ResourceReservation,
     _new_id,
     _now_iso,
 )
@@ -590,3 +596,247 @@ def get_latest_decision(
         constitutional_validation_id = row["constitutional_validation_id"],
         metadata                     = json.loads(row["metadata_json"] or "{}"),
     )
+
+
+# ---------------------------------------------------------------------------
+# ResourceReservation CRUD (MF-ECO-001)
+# ---------------------------------------------------------------------------
+
+def _row_to_reservation(row: sqlite3.Row) -> ResourceReservation:
+    return ResourceReservation(
+        reservation_id  = row["reservation_id"],
+        mission_id      = row["mission_id"],
+        envelope_id     = row["envelope_id"],
+        amount_minor    = int(row["amount_minor"]),
+        currency        = row["currency"],
+        status          = row["status"],
+        idempotency_key = row["idempotency_key"],
+        reason          = row["reason"],
+        created_at      = row["created_at"],
+        updated_at      = row["updated_at"],
+        released_at     = row["released_at"],
+        consumed_at     = row["consumed_at"],
+    )
+
+
+def create_reservation(
+    conn: sqlite3.Connection,
+    *,
+    mission_id: str,
+    envelope_id: str,
+    amount_minor: int,
+    idempotency_key: str,
+    currency: str = "EUR",
+    reason: str | None = None,
+) -> ResourceReservation:
+    """Crea una reservation di risorse. Idempotente su (envelope_id, idempotency_key).
+
+    Raises:
+        ReservationIdempotencyReplay: se esiste già una reservation con
+            la stessa coppia (envelope_id, idempotency_key).
+    """
+    existing = conn.execute(
+        "SELECT reservation_id FROM resource_reservations "
+        "WHERE envelope_id = ? AND idempotency_key = ?",
+        (envelope_id, idempotency_key),
+    ).fetchone()
+    if existing is not None:
+        raise ReservationIdempotencyReplay(existing["reservation_id"])
+
+    now = _now_iso()
+    res_id = _new_id()
+    conn.execute(
+        """
+        INSERT INTO resource_reservations
+               (reservation_id, mission_id, envelope_id, amount_minor, currency,
+                status, idempotency_key, reason, created_at, updated_at,
+                released_at, consumed_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?,NULL,NULL)
+        """,
+        (
+            res_id, mission_id, envelope_id, amount_minor, currency,
+            ReservationStatus.RESERVED.value, idempotency_key, reason,
+            now, now,
+        ),
+    )
+    conn.commit()
+    return ResourceReservation(
+        reservation_id  = res_id,
+        mission_id      = mission_id,
+        envelope_id     = envelope_id,
+        amount_minor    = amount_minor,
+        currency        = currency,
+        status          = ReservationStatus.RESERVED.value,
+        idempotency_key = idempotency_key,
+        reason          = reason,
+        created_at      = now,
+        updated_at      = now,
+    )
+
+
+def get_reservation(
+    conn: sqlite3.Connection,
+    reservation_id: str,
+) -> ResourceReservation | None:
+    """Ritorna la reservation con il dato reservation_id, o None."""
+    row = conn.execute(
+        "SELECT * FROM resource_reservations WHERE reservation_id = ?",
+        (reservation_id,),
+    ).fetchone()
+    if row is None:
+        return None
+    return _row_to_reservation(row)
+
+
+def get_reservation_by_idempotency_key(
+    conn: sqlite3.Connection,
+    envelope_id: str,
+    idempotency_key: str,
+) -> ResourceReservation | None:
+    """Ritorna la reservation con la data (envelope_id, idempotency_key), o None."""
+    row = conn.execute(
+        "SELECT * FROM resource_reservations "
+        "WHERE envelope_id = ? AND idempotency_key = ?",
+        (envelope_id, idempotency_key),
+    ).fetchone()
+    if row is None:
+        return None
+    return _row_to_reservation(row)
+
+
+def list_active_reservations(
+    conn: sqlite3.Connection,
+    envelope_id: str,
+) -> list[ResourceReservation]:
+    """Ritorna tutte le reservations in status 'reserved' per l'envelope."""
+    rows = conn.execute(
+        "SELECT * FROM resource_reservations "
+        "WHERE envelope_id = ? AND status = ? ORDER BY created_at ASC",
+        (envelope_id, ReservationStatus.RESERVED.value),
+    ).fetchall()
+    return [_row_to_reservation(r) for r in rows]
+
+
+def get_total_reserved(
+    conn: sqlite3.Connection,
+    envelope_id: str,
+) -> int:
+    """Somma degli amount_minor di tutte le reservations attive (status='reserved')."""
+    row = conn.execute(
+        "SELECT COALESCE(SUM(amount_minor), 0) AS total "
+        "FROM resource_reservations "
+        "WHERE envelope_id = ? AND status = ?",
+        (envelope_id, ReservationStatus.RESERVED.value),
+    ).fetchone()
+    return int(row["total"])
+
+
+def release_reservation(
+    conn: sqlite3.Connection,
+    reservation_id: str,
+) -> ResourceReservation:
+    """Transita la reservation a status 'released'. Idempotente se già released.
+
+    Raises:
+        ReservationNotFoundError: se non trovata.
+        ReservationAlreadyConsumedError: se già consumata.
+    """
+    row = conn.execute(
+        "SELECT * FROM resource_reservations WHERE reservation_id = ?",
+        (reservation_id,),
+    ).fetchone()
+    if row is None:
+        raise ReservationNotFoundError(reservation_id)
+
+    status = row["status"]
+    if status == ReservationStatus.RELEASED.value:
+        return _row_to_reservation(row)  # idempotente
+    if status == ReservationStatus.CONSUMED.value:
+        raise ReservationAlreadyConsumedError(
+            f"Reservation {reservation_id} già consumata — impossibile rilasciare"
+        )
+
+    now = _now_iso()
+    conn.execute(
+        "UPDATE resource_reservations "
+        "SET status = ?, released_at = ?, updated_at = ? "
+        "WHERE reservation_id = ?",
+        (ReservationStatus.RELEASED.value, now, now, reservation_id),
+    )
+    conn.commit()
+    row = conn.execute(
+        "SELECT * FROM resource_reservations WHERE reservation_id = ?",
+        (reservation_id,),
+    ).fetchone()
+    return _row_to_reservation(row)
+
+
+def consume_reservation(
+    conn: sqlite3.Connection,
+    reservation_id: str,
+) -> ResourceReservation:
+    """Transita la reservation a status 'consumed'.
+
+    Raises:
+        ReservationNotFoundError: se non trovata.
+        ReservationAlreadyConsumedError: se già consumata.
+        ReservationAlreadyReleasedError: se già rilasciata.
+    """
+    row = conn.execute(
+        "SELECT * FROM resource_reservations WHERE reservation_id = ?",
+        (reservation_id,),
+    ).fetchone()
+    if row is None:
+        raise ReservationNotFoundError(reservation_id)
+
+    status = row["status"]
+    if status == ReservationStatus.CONSUMED.value:
+        raise ReservationAlreadyConsumedError(
+            f"Reservation {reservation_id} già consumata"
+        )
+    if status == ReservationStatus.RELEASED.value:
+        from mercury_foundry.outcome.models import ReservationAlreadyReleasedError as _RAR
+        raise _RAR(f"Reservation {reservation_id} già rilasciata — impossibile consumare")
+
+    now = _now_iso()
+    conn.execute(
+        "UPDATE resource_reservations "
+        "SET status = ?, consumed_at = ?, updated_at = ? "
+        "WHERE reservation_id = ?",
+        (ReservationStatus.CONSUMED.value, now, now, reservation_id),
+    )
+    conn.commit()
+    row = conn.execute(
+        "SELECT * FROM resource_reservations WHERE reservation_id = ?",
+        (reservation_id,),
+    ).fetchone()
+    return _row_to_reservation(row)
+
+
+def get_total_consumption_for_mission(
+    conn: sqlite3.Connection,
+    mission_id: str,
+) -> dict[str, int]:
+    """Somma totale dei consumi per tutti gli envelope di una Mission (multi-envelope).
+
+    Utile per calcolare il consumo aggregato quando una Mission ha più envelope.
+    """
+    row = conn.execute(
+        """
+        SELECT COALESCE(SUM(cost_minor), 0)                  AS total_cost_minor,
+               COALESCE(SUM(compute_units), 0)               AS total_compute_units,
+               COALESCE(SUM(llm_tokens), 0)                  AS total_llm_tokens,
+               COALESCE(SUM(external_service_cost_minor), 0) AS total_external_cost_minor,
+               COALESCE(SUM(human_minutes), 0)               AS total_human_minutes
+          FROM resource_consumptions
+         WHERE mission_id = ?
+        """,
+        (mission_id,),
+    ).fetchone()
+    return {
+        "cost_minor":                  int(row["total_cost_minor"]),
+        "compute_units":               int(row["total_compute_units"]),
+        "llm_tokens":                  int(row["total_llm_tokens"]),
+        "external_service_cost_minor": int(row["total_external_cost_minor"]),
+        "human_minutes":               int(row["total_human_minutes"]),
+    }

@@ -108,6 +108,96 @@ class OutcomeDecisionImmutableError(RuntimeError):
     """Tentativo di modificare una decisione immutabile."""
 
 
+class ReservationNotFoundError(KeyError):
+    """Reservation non trovata per il reservation_id dato."""
+
+
+class ReservationAlreadyConsumedError(RuntimeError):
+    """Tentativo di operare su una reservation già consumata."""
+
+
+class ReservationAlreadyReleasedError(RuntimeError):
+    """Tentativo di operare su una reservation già rilasciata."""
+
+
+class ReservationIdempotencyReplay(Exception):
+    """Reservation già esistente con la stessa (envelope_id, idempotency_key)."""
+    def __init__(self, existing_reservation_id: str):
+        super().__init__(f"Reservation già esistente: {existing_reservation_id}")
+        self.existing_reservation_id = existing_reservation_id
+
+
+# ---------------------------------------------------------------------------
+# ReservationStatus
+# ---------------------------------------------------------------------------
+
+class ReservationStatus(str, Enum):
+    RESERVED = "reserved"
+    CONSUMED = "consumed"
+    RELEASED = "released"
+    EXPIRED  = "expired"
+
+
+# ---------------------------------------------------------------------------
+# ResourceReservation (DB-persisted)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class ResourceReservation:
+    """Record DB di una reservation di risorse.
+
+    Invarianti:
+    - amount_minor > 0
+    - status ∈ ReservationStatus
+    - (envelope_id, idempotency_key) UNIQUE nel DB
+    """
+    reservation_id:  str
+    mission_id:      str
+    envelope_id:     str
+    amount_minor:    int
+    currency:        str
+    status:          str           # ReservationStatus.value
+    idempotency_key: str
+    created_at:      str
+    updated_at:      str
+    reason:          str | None = None
+    released_at:     str | None = None
+    consumed_at:     str | None = None
+
+    def to_dict(self) -> dict:
+        return {
+            "reservation_id":  self.reservation_id,
+            "mission_id":      self.mission_id,
+            "envelope_id":     self.envelope_id,
+            "amount_minor":    self.amount_minor,
+            "currency":        self.currency,
+            "status":          self.status,
+            "idempotency_key": self.idempotency_key,
+            "reason":          self.reason,
+            "created_at":      self.created_at,
+            "updated_at":      self.updated_at,
+            "released_at":     self.released_at,
+            "consumed_at":     self.consumed_at,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "ResourceReservation":
+        return cls(
+            reservation_id  = d["reservation_id"],
+            mission_id      = d["mission_id"],
+            envelope_id     = d["envelope_id"],
+            amount_minor    = int(d["amount_minor"]),
+            currency        = d.get("currency", "EUR"),
+            status          = d["status"],
+            idempotency_key = d["idempotency_key"],
+            reason          = d.get("reason"),
+            created_at      = d["created_at"],
+            updated_at      = d["updated_at"],
+            released_at     = d.get("released_at"),
+            consumed_at     = d.get("consumed_at"),
+        )
+
+
 # ---------------------------------------------------------------------------
 # EconomicOutcomePlan
 # ---------------------------------------------------------------------------

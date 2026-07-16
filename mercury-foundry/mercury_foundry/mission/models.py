@@ -3,8 +3,9 @@
 Tutti i modelli usano enum + dataclass per validazione forte alla costruzione.
 Nessun LLM, nessuna euristica: solo strutture dati e costanti.
 
-Budget: REAL per consistenza con `max_budget` in decision_mandates.
-Debito tecnico: migrare a INTEGER minor units se il dominio economico lo richiede.
+Budget: migrato a INTEGER minor units (MF-ECO-001).
+I campi float legacy (approved_amount, committed_amount, spent_amount, *_limit)
+sono mantenuti per backward compat ma derivati dai campi *_minor canonici.
 """
 
 from __future__ import annotations
@@ -223,57 +224,151 @@ class TerminationCriterion:
 
 @dataclass
 class MissionBudget:
-    """Budget economico della Mission. Importi in REAL (euro o valuta indicata).
+    """Budget economico della Mission. Importi in INTEGER minor units (MF-ECO-001).
 
-    Debito tecnico: migrare a INTEGER minor units (centesimi) in un futuro
-    task se il dominio economico richiede precisione decimale garantita.
+    Campi canonici: *_minor (integer).
+    Campi legacy: approved_amount, committed_amount, spent_amount, *_limit (float)
+      — mantenuti per backward compat, sempre derivati dai *_minor in __post_init__.
+
+    Conversione: 1 EUR = 100 minor units (centesimi). Usa Decimal via minor_units.py.
+
+    __post_init__ sincronizza i campi: se vengono passati float, li converte in minor;
+    poi i float vengono ricalcolati dai minor (source of truth = *_minor integer).
     """
     currency: str = "EUR"
-    approved_amount: float = 0.0
-    committed_amount: float = 0.0
-    spent_amount: float = 0.0
-    compute_limit: float | None = None
+
+    # Campi canonici integer minor units (MF-ECO-001)
+    approved_amount_minor:          int = 0
+    committed_amount_minor:         int = 0
+    spent_amount_minor:             int = 0
+    compute_limit_minor:            int | None = None
+    external_service_limit_minor:   int | None = None
+    marketing_limit_minor:          int | None = None
+    human_service_limit_minor:      int | None = None
+
+    # Campi legacy float (backward compat — derivati dai *_minor dopo __post_init__)
+    approved_amount:        float = 0.0
+    committed_amount:       float = 0.0
+    spent_amount:           float = 0.0
+    compute_limit:          float | None = None
     external_service_limit: float | None = None
-    marketing_limit: float | None = None
-    human_service_limit: float | None = None
+    marketing_limit:        float | None = None
+    human_service_limit:    float | None = None
+
+    def __post_init__(self) -> None:
+        from mercury_foundry.outcome.minor_units import eur_to_minor, minor_to_eur_float
+        # --- approved ---
+        if self.approved_amount != 0.0 and self.approved_amount_minor == 0:
+            self.approved_amount_minor = eur_to_minor(self.approved_amount)
+        if self.approved_amount_minor != 0:
+            self.approved_amount = minor_to_eur_float(self.approved_amount_minor)
+
+        # --- committed ---
+        if self.committed_amount != 0.0 and self.committed_amount_minor == 0:
+            self.committed_amount_minor = eur_to_minor(self.committed_amount)
+        if self.committed_amount_minor != 0:
+            self.committed_amount = minor_to_eur_float(self.committed_amount_minor)
+
+        # --- spent ---
+        if self.spent_amount != 0.0 and self.spent_amount_minor == 0:
+            self.spent_amount_minor = eur_to_minor(self.spent_amount)
+        if self.spent_amount_minor != 0:
+            self.spent_amount = minor_to_eur_float(self.spent_amount_minor)
+
+        # --- compute_limit ---
+        if self.compute_limit is not None and self.compute_limit_minor is None:
+            self.compute_limit_minor = eur_to_minor(self.compute_limit)
+        if self.compute_limit_minor is not None:
+            self.compute_limit = minor_to_eur_float(self.compute_limit_minor)
+
+        # --- external_service_limit ---
+        if self.external_service_limit is not None and self.external_service_limit_minor is None:
+            self.external_service_limit_minor = eur_to_minor(self.external_service_limit)
+        if self.external_service_limit_minor is not None:
+            self.external_service_limit = minor_to_eur_float(self.external_service_limit_minor)
+
+        # --- marketing_limit ---
+        if self.marketing_limit is not None and self.marketing_limit_minor is None:
+            self.marketing_limit_minor = eur_to_minor(self.marketing_limit)
+        if self.marketing_limit_minor is not None:
+            self.marketing_limit = minor_to_eur_float(self.marketing_limit_minor)
+
+        # --- human_service_limit ---
+        if self.human_service_limit is not None and self.human_service_limit_minor is None:
+            self.human_service_limit_minor = eur_to_minor(self.human_service_limit)
+        if self.human_service_limit_minor is not None:
+            self.human_service_limit = minor_to_eur_float(self.human_service_limit_minor)
 
     def validate(self) -> list[str]:
+        """Valida il budget. Usa i campi *_minor canonici."""
         errors = []
-        if self.approved_amount < 0:
+        if self.approved_amount_minor < 0:
             errors.append("approved_amount deve essere >= 0")
-        if self.committed_amount < 0:
+        if self.committed_amount_minor < 0:
             errors.append("committed_amount deve essere >= 0")
-        if self.spent_amount < 0:
+        if self.spent_amount_minor < 0:
             errors.append("spent_amount deve essere >= 0")
-        if self.committed_amount > self.approved_amount:
+        if self.committed_amount_minor > self.approved_amount_minor:
             errors.append("committed_amount non può superare approved_amount")
-        if self.spent_amount > self.approved_amount:
+        if self.spent_amount_minor > self.approved_amount_minor:
             errors.append("spent_amount non può superare approved_amount")
         return errors
 
     def to_dict(self) -> dict:
         return {
             "currency": self.currency,
-            "approved_amount": self.approved_amount,
-            "committed_amount": self.committed_amount,
-            "spent_amount": self.spent_amount,
-            "compute_limit": self.compute_limit,
+            # Canonical integer minor units (MF-ECO-001)
+            "approved_amount_minor":        self.approved_amount_minor,
+            "committed_amount_minor":       self.committed_amount_minor,
+            "spent_amount_minor":           self.spent_amount_minor,
+            "compute_limit_minor":          self.compute_limit_minor,
+            "external_service_limit_minor": self.external_service_limit_minor,
+            "marketing_limit_minor":        self.marketing_limit_minor,
+            "human_service_limit_minor":    self.human_service_limit_minor,
+            # Legacy float aliases (backward compat — derived from *_minor)
+            "approved_amount":        self.approved_amount,
+            "committed_amount":       self.committed_amount,
+            "spent_amount":           self.spent_amount,
+            "compute_limit":          self.compute_limit,
             "external_service_limit": self.external_service_limit,
-            "marketing_limit": self.marketing_limit,
-            "human_service_limit": self.human_service_limit,
+            "marketing_limit":        self.marketing_limit,
+            "human_service_limit":    self.human_service_limit,
         }
 
     @classmethod
     def from_dict(cls, d: dict) -> "MissionBudget":
+        """Costruisce MissionBudget da un dizionario.
+
+        Priorità: se presenti i campi *_minor (canonici), li usa.
+        Altrimenti converte i campi float legacy in minor units.
+        """
+        from mercury_foundry.outcome.minor_units import eur_to_minor
+
+        def _get_minor(key_minor: str, key_float: str, default: float = 0.0) -> int:
+            if key_minor in d and d[key_minor] is not None:
+                return int(d[key_minor])
+            v = d.get(key_float, default)
+            if v is None:
+                return 0
+            return eur_to_minor(v)
+
+        def _get_limit_minor(key_minor: str, key_float: str) -> int | None:
+            if key_minor in d:
+                return int(d[key_minor]) if d[key_minor] is not None else None
+            v = d.get(key_float)
+            if v is None:
+                return None
+            return eur_to_minor(v)
+
         return cls(
-            currency=d.get("currency", "EUR"),
-            approved_amount=d.get("approved_amount", 0.0),
-            committed_amount=d.get("committed_amount", 0.0),
-            spent_amount=d.get("spent_amount", 0.0),
-            compute_limit=d.get("compute_limit"),
-            external_service_limit=d.get("external_service_limit"),
-            marketing_limit=d.get("marketing_limit"),
-            human_service_limit=d.get("human_service_limit"),
+            currency                      = d.get("currency", "EUR"),
+            approved_amount_minor         = _get_minor("approved_amount_minor", "approved_amount"),
+            committed_amount_minor        = _get_minor("committed_amount_minor", "committed_amount"),
+            spent_amount_minor            = _get_minor("spent_amount_minor", "spent_amount"),
+            compute_limit_minor           = _get_limit_minor("compute_limit_minor", "compute_limit"),
+            external_service_limit_minor  = _get_limit_minor("external_service_limit_minor", "external_service_limit"),
+            marketing_limit_minor         = _get_limit_minor("marketing_limit_minor", "marketing_limit"),
+            human_service_limit_minor     = _get_limit_minor("human_service_limit_minor", "human_service_limit"),
         )
 
 

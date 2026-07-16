@@ -521,6 +521,27 @@ CREATE TABLE IF NOT EXISTS outcome_transition_records (
     metadata_json   TEXT NOT NULL DEFAULT '{}'
 );
 
+-- Reservations di risorse (MF-ECO-001).
+-- Una reservation blocca fondi prima di consumarli definitivamente.
+-- Invarianti: amount_minor > 0; (envelope_id, idempotency_key) UNIQUE;
+-- status ∈ {reserved, consumed, released, expired}.
+CREATE TABLE IF NOT EXISTS resource_reservations (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    reservation_id  TEXT NOT NULL UNIQUE,
+    mission_id      TEXT NOT NULL,
+    envelope_id     TEXT NOT NULL REFERENCES resource_envelopes(envelope_id),
+    amount_minor    INTEGER NOT NULL CHECK(amount_minor > 0),
+    currency        TEXT NOT NULL DEFAULT 'EUR',
+    status          TEXT NOT NULL DEFAULT 'reserved',
+    idempotency_key TEXT NOT NULL,
+    reason          TEXT,
+    created_at      TEXT NOT NULL,
+    updated_at      TEXT NOT NULL,
+    released_at     TEXT,
+    consumed_at     TEXT,
+    UNIQUE(envelope_id, idempotency_key)
+);
+
 -- MF-FIX-007: trigger BEFORE UPDATE e BEFORE DELETE su audit_log sono installati
 -- via migrazione in `state.db._migrate_audit_log_triggers`, NON qui.
 -- Motivo: `conn.executescript()` divide il testo sulle `;` anche dentro i blocchi

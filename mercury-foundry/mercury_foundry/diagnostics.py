@@ -74,12 +74,13 @@ REPLICATION_TABLES = {
     "replication_gate_results",
 }
 
-# MF-OUTCOME-001: tabelle dell'Economic Outcome Governance
+# MF-OUTCOME-001 / MF-ECO-001: tabelle dell'Economic Outcome Governance
 OUTCOME_TABLES = {
     "economic_outcome_plans",
     "outcome_metric_snapshots",
     "resource_envelopes",
     "resource_consumptions",
+    "resource_reservations",   # MF-ECO-001
     "outcome_decisions",
     "outcome_transition_records",
 }
@@ -949,6 +950,9 @@ def _check_outcome_layer(
         "idx_outcome_plans_status",
         "idx_outcome_decisions_plan_id",
         "idx_resource_envelopes_mission_id",
+        # MF-ECO-001
+        "idx_resource_reservations_envelope_id",
+        "idx_resource_reservations_status",
     }
     missing_indexes = expected_indexes - indexes
     if missing_indexes:

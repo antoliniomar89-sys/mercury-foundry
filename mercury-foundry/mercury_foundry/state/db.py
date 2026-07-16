@@ -49,6 +49,96 @@ def init_schema(conn: sqlite3.Connection) -> None:
     _migrate_outcome_indexes(conn)
     from mercury_foundry.outcome.seed import seed_economic_governance  # lazy import
     seed_economic_governance(conn)
+    # MF-ECO-001: persistenza reservations + migrazione budget a minor units.
+    # Deve girare DOPO seed_economic_governance (le tabelle outcome sono già presenti).
+    _migrate_resource_reservations_indexes(conn)
+    _migrate_mission_budget_to_minor(conn)
+
+
+def _migrate_resource_reservations_indexes(conn: sqlite3.Connection) -> None:
+    """Crea indici idempotenti per resource_reservations (MF-ECO-001)."""
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_resource_reservations_envelope_id "
+        "ON resource_reservations(envelope_id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_resource_reservations_mission_id "
+        "ON resource_reservations(mission_id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_resource_reservations_status "
+        "ON resource_reservations(status)"
+    )
+    conn.commit()
+
+
+def _migrate_mission_budget_to_minor(conn: sqlite3.Connection) -> None:
+    """Migra budget_json esistenti da float EUR a integer minor units (MF-ECO-001).
+
+    Strategia:
+    - DB nuovi: budget_json già emesso da MissionBudget.to_dict() include
+      *_minor fields → nessuna conversione necessaria.
+    - DB esistenti: budget_json con solo float (approved_amount, ecc.)
+      → converti con Decimal, scrivi aggiornati includendo i *_minor fields.
+    - Idempotente: se *_minor già presenti, non modifica.
+    - Fail-esplicito: se il JSON non è parsabile, solleva RuntimeError.
+    - Nessuna perdita di dati: i float originali vengono conservati nel JSON.
+    """
+    import json
+    from decimal import ROUND_HALF_UP, Decimal
+
+    def _eur_to_minor(v: float | int | str) -> int:
+        """Converti EUR float → minor units via Decimal (deterministica)."""
+        d = Decimal(str(v))
+        return int((d * 100).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+
+    rows = conn.execute("SELECT mission_id, budget_json FROM missions").fetchall()
+    for row in rows:
+        mid = row["mission_id"]
+        raw = row["budget_json"] or "{}"
+        try:
+            d = json.loads(raw)
+        except Exception as exc:
+            raise RuntimeError(
+                f"budget_json non parsabile per mission_id={mid}: {exc}"
+            ) from exc
+
+        # Se i campi *_minor sono già presenti → idempotente, non modifica
+        if "approved_amount_minor" in d:
+            continue
+
+        # Converti float → minor
+        def _minor(key: str, default: float = 0.0) -> int:
+            v = d.get(key, default)
+            if v is None:
+                return 0
+            return _eur_to_minor(v)
+
+        def _limit_minor(key: str) -> int | None:
+            v = d.get(key)
+            if v is None:
+                return None
+            return _eur_to_minor(v)
+
+        d["approved_amount_minor"]        = _minor("approved_amount")
+        d["committed_amount_minor"]       = _minor("committed_amount")
+        d["spent_amount_minor"]           = _minor("spent_amount")
+        d["compute_limit_minor"]          = _limit_minor("compute_limit")
+        d["external_service_limit_minor"] = _limit_minor("external_service_limit")
+        d["marketing_limit_minor"]        = _limit_minor("marketing_limit")
+        d["human_service_limit_minor"]    = _limit_minor("human_service_limit")
+
+        try:
+            conn.execute(
+                "UPDATE missions SET budget_json = ? WHERE mission_id = ?",
+                (json.dumps(d), mid),
+            )
+        except Exception as exc:
+            raise RuntimeError(
+                f"Impossibile aggiornare budget_json per mission_id={mid}: {exc}"
+            ) from exc
+
+    conn.commit()
 
 
 def _migrate_outcome_indexes(conn: sqlite3.Connection) -> None:
