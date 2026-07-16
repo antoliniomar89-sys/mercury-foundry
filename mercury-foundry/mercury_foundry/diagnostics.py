@@ -38,6 +38,14 @@ EXPECTED_TABLES = {
     "audit_log",
 }
 
+# MF-ARCH-008: tabelle dell'Autonomy Boundary Layer
+AUTONOMY_TABLES = {
+    "organs",
+    "decision_mandates",
+    "decision_records",
+    "organ_events",
+}
+
 STATUS_OK = "ok"
 STATUS_WARNING = "warning"
 STATUS_ERROR = "error"
@@ -45,6 +53,7 @@ STATUS_ERROR = "error"
 OVERALL_READY_SIMULATED = "READY_SIMULATED"
 OVERALL_READY_REAL = "READY_REAL"
 OVERALL_NOT_READY = "NOT_READY"
+OVERALL_READY_SHADOW = "READY_SHADOW"   # MF-ARCH-008: autonomy boundary attivo in shadow mode
 
 
 @dataclass
@@ -91,8 +100,9 @@ def run_doctor(
     _check_attempt_limit(report)
     _check_approval_gate(report)
     _check_audit_log_module(report)
+    autonomy_ok = _check_autonomy_boundary(report, db_path)
 
-    report.overall_status = _compute_overall_status(report, provider_is_simulated)
+    report.overall_status = _compute_overall_status(report, provider_is_simulated, autonomy_ok)
     return report
 
 
@@ -286,9 +296,158 @@ def _check_audit_log_module(report: DoctorReport) -> None:
         report.add("audit_log", STATUS_ERROR, f"Modulo audit log non disponibile: {exc}")
 
 
-def _compute_overall_status(report: DoctorReport, provider_is_simulated: bool | None) -> str:
+def _check_autonomy_boundary(report: DoctorReport, db_path: Path | str | None) -> bool:
+    """MF-ARCH-008: verifica il livello di autonomia decisionale (AUTONOMY_BOUNDARY).
+
+    Ritorna True se tutti i controlli passano senza ERROR (la sola presenza
+    di WARNING non impedisce READY_SHADOW).
+    """
+    from mercury_foundry import config as cfg
+    from mercury_foundry.state.db import connect
+
+    path = Path(db_path) if db_path is not None else cfg.DEFAULT_DB_PATH
+
+    # -- tabelle presenti --
+    try:
+        conn = sqlite3.connect(str(path))
+        conn.row_factory = sqlite3.Row
+        existing = {
+            row["name"]
+            for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+        }
+        missing_auto = AUTONOMY_TABLES - existing
+        if missing_auto:
+            report.add(
+                "autonomy_boundary_tables",
+                STATUS_ERROR,
+                f"Tabelle autonomy mancanti: {sorted(missing_auto)}",
+            )
+            conn.close()
+            return False
+        report.add(
+            "autonomy_boundary_tables",
+            STATUS_OK,
+            f"Tabelle autonomy presenti: {sorted(AUTONOMY_TABLES)}",
+        )
+    except sqlite3.Error as exc:
+        report.add("autonomy_boundary_tables", STATUS_ERROR, f"Errore lettura tabelle: {exc}")
+        return False
+
+    # -- feature flag riconosciuta --
+    mode = cfg.AUTONOMY_MODE
+    if mode not in ("shadow", "enforced"):
+        report.add(
+            "autonomy_boundary_flag",
+            STATUS_ERROR,
+            f"MERCURY_AUTONOMY_MODE non valido: {mode!r}",
+        )
+        conn.close()
+        return False
+    report.add(
+        "autonomy_boundary_flag",
+        STATUS_OK,
+        f"MERCURY_AUTONOMY_MODE riconosciuta: {mode!r}",
+    )
+
+    # -- organo pilota presente --
+    from mercury_foundry.autonomy.models import get_organ_by_key, list_mandates_for_organ, count_orphan_decision_records
+    organ = get_organ_by_key(conn, "FOUNDRY_GOVERNANCE")
+    if organ is None:
+        report.add(
+            "autonomy_boundary_pilot_organ",
+            STATUS_WARNING,
+            "Organo pilota FOUNDRY_GOVERNANCE non trovato — eseguire seed_foundry_governance()",
+        )
+        conn.close()
+        return False
+    report.add(
+        "autonomy_boundary_pilot_organ",
+        STATUS_OK,
+        f"Organo pilota FOUNDRY_GOVERNANCE presente (id={organ['id']})",
+    )
+
+    # -- mandati iniziali presenti (4 attesi) --
+    mandates = list_mandates_for_organ(conn, organ["id"])
+    n_mandates = len(mandates)
+    expected_n = 4
+    if n_mandates < expected_n:
+        report.add(
+            "autonomy_boundary_mandates",
+            STATUS_WARNING,
+            f"Mandati FOUNDRY_GOVERNANCE: {n_mandates} presenti, {expected_n} attesi",
+        )
+    else:
+        report.add(
+            "autonomy_boundary_mandates",
+            STATUS_OK,
+            f"Mandati FOUNDRY_GOVERNANCE presenti: {n_mandates} (>= {expected_n} attesi)",
+        )
+
+    # -- nessun mandato duplicato (garantito da UNIQUE, ma verifichiamo) --
+    dup_row = conn.execute(
+        """
+        SELECT organ_id, decision_type, COUNT(*) AS n
+        FROM decision_mandates GROUP BY organ_id, decision_type HAVING n > 1
+        """
+    ).fetchone()
+    if dup_row is not None:
+        report.add(
+            "autonomy_boundary_no_duplicate_mandates",
+            STATUS_ERROR,
+            f"Mandati duplicati trovati: organ_id={dup_row['organ_id']}, "
+            f"decision_type={dup_row['decision_type']}, count={dup_row['n']}",
+        )
+        conn.close()
+        return False
+    report.add(
+        "autonomy_boundary_no_duplicate_mandates",
+        STATUS_OK,
+        "Nessun mandato duplicato (vincolo UNIQUE rispettato)",
+    )
+
+    # -- nessun decision_record orfano --
+    orphans = count_orphan_decision_records(conn)
+    if orphans > 0:
+        report.add(
+            "autonomy_boundary_no_orphan_records",
+            STATUS_WARNING,
+            f"{orphans} decision_record orfani (organ_id non esistente)",
+        )
+    else:
+        report.add(
+            "autonomy_boundary_no_orphan_records",
+            STATUS_OK,
+            "Nessun decision_record orfano",
+        )
+
+    # -- modalità corrente --
+    report.add(
+        "autonomy_boundary_mode",
+        STATUS_OK if mode == "shadow" else STATUS_WARNING,
+        f"Modalità corrente: {mode.upper()} "
+        f"({'registra senza bloccare' if mode == 'shadow' else 'applica i mandati'})",
+    )
+
+    conn.close()
+
+    # Autonomy ok se nessun ERROR nella sezione autonomy
+    autonomy_checks = [
+        c for c in report.checks if c.name.startswith("autonomy_boundary")
+    ]
+    return not any(c.status == STATUS_ERROR for c in autonomy_checks)
+
+
+def _compute_overall_status(
+    report: DoctorReport,
+    provider_is_simulated: bool | None,
+    autonomy_ok: bool = False,
+) -> str:
     if report.has_errors():
         return OVERALL_NOT_READY
     if provider_is_simulated is None:
         return OVERALL_NOT_READY
+    # MF-ARCH-008: READY_SHADOW prevale su READY_SIMULATED/READY_REAL
+    # quando l'Autonomy Boundary Layer è correttamente inizializzato.
+    if autonomy_ok:
+        return OVERALL_READY_SHADOW
     return OVERALL_READY_SIMULATED if provider_is_simulated else OVERALL_READY_REAL

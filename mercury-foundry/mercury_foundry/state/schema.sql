@@ -154,6 +154,68 @@ CREATE TABLE IF NOT EXISTS audit_log (
     created_at TEXT NOT NULL
 );
 
+-- ===========================================================================
+-- MF-ARCH-008: Autonomy Boundary Layer V0
+-- ===========================================================================
+
+-- Unità decisionali con autorità locale esplicita.
+CREATE TABLE IF NOT EXISTS organs (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    organ_key  TEXT NOT NULL UNIQUE,
+    name       TEXT NOT NULL,
+    mission    TEXT NOT NULL,
+    status     TEXT NOT NULL DEFAULT 'active',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+-- Autorità delegata per tipo di decisione (UNIQUE per organ+decision_type).
+CREATE TABLE IF NOT EXISTS decision_mandates (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    organ_id         INTEGER NOT NULL REFERENCES organs(id),
+    decision_type    TEXT NOT NULL,
+    authority_mode   TEXT NOT NULL CHECK (authority_mode IN ('autonomous','proposal','escalation_required','forbidden')),
+    max_risk_score   REAL,
+    max_budget       REAL,
+    requires_evidence INTEGER NOT NULL DEFAULT 0,
+    enabled          INTEGER NOT NULL DEFAULT 1,
+    created_at       TEXT NOT NULL,
+    updated_at       TEXT NOT NULL,
+    UNIQUE (organ_id, decision_type)
+);
+
+-- Log immutabile (nei campi critici) di ogni decisione presa da un organo.
+CREATE TABLE IF NOT EXISTS decision_records (
+    id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+    organ_id             INTEGER NOT NULL REFERENCES organs(id),
+    decision_type        TEXT NOT NULL,
+    authority_mode       TEXT NOT NULL,
+    subject_type         TEXT NOT NULL,
+    subject_id           TEXT NOT NULL,
+    input_evidence_json  TEXT,
+    expected_outcome_json TEXT,
+    confidence           REAL,
+    risk_score           REAL,
+    status               TEXT NOT NULL CHECK (status IN ('proposed','authorized','rejected','escalated','executed','failed','revoked')),
+    reason               TEXT,
+    created_at           TEXT NOT NULL,
+    executed_at          TEXT
+);
+
+-- Bus eventi inter-organo (correlation/causation tracking).
+CREATE TABLE IF NOT EXISTS organ_events (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    source_organ_id  INTEGER REFERENCES organs(id),
+    target_organ_id  INTEGER REFERENCES organs(id),
+    event_type       TEXT NOT NULL,
+    payload_json     TEXT,
+    correlation_id   TEXT NOT NULL,
+    causation_id     TEXT,
+    status           TEXT NOT NULL CHECK (status IN ('pending','consumed','failed','ignored')),
+    created_at       TEXT NOT NULL,
+    consumed_at      TEXT
+);
+
 -- MF-FIX-007: trigger BEFORE UPDATE e BEFORE DELETE su audit_log sono installati
 -- via migrazione in `state.db._migrate_audit_log_triggers`, NON qui.
 -- Motivo: `conn.executescript()` divide il testo sulle `;` anche dentro i blocchi

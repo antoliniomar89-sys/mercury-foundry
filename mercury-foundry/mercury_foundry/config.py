@@ -60,3 +60,23 @@ MAX_ATTEMPTS = _load_max_attempts()
 
 # Timeout (secondi) per l'esecuzione reale dei test — evita loop appesi
 TEST_TIMEOUT_SECONDS = 60
+
+# ---------------------------------------------------------------------------
+# MF-ARCH-008 — Autonomy Boundary Layer
+# ---------------------------------------------------------------------------
+
+# Modalità operativa dell'Autonomy Boundary Layer.
+#   shadow   (default) — il servizio registra le decisioni ma non blocca mai
+#                        il flusso operativo esistente; le divergenze vengono
+#                        scritte nell'audit per analisi offline.
+#   enforced           — il servizio applica i mandati: una decisione
+#                        forbidden o escalation_required solleva un'eccezione
+#                        che blocca l'operazione.
+_AUTONOMY_MODE_ENV = "MERCURY_AUTONOMY_MODE"
+_raw_autonomy_mode = os.environ.get(_AUTONOMY_MODE_ENV, "shadow")
+if _raw_autonomy_mode not in ("shadow", "enforced"):
+    raise ValueError(
+        f"{_AUTONOMY_MODE_ENV} deve essere 'shadow' o 'enforced', "
+        f"ricevuto: {_raw_autonomy_mode!r}"
+    )
+AUTONOMY_MODE: str = _raw_autonomy_mode

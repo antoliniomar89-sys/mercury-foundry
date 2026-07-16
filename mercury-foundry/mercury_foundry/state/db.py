@@ -28,6 +28,11 @@ def init_schema(conn: sqlite3.Connection) -> None:
     _migrate_candidates_columns(conn)
     _migrate_candidates_approval_revoked(conn)
     _migrate_audit_log_triggers(conn)
+    # MF-ARCH-008: seeding idempotente dell'organo pilota FOUNDRY_GOVERNANCE
+    # con i 4 mandati iniziali.  Va eseguito DOPO l'executescript che ha già
+    # creato le tabelle organs/decision_mandates tramite schema.sql.
+    from mercury_foundry.autonomy.seed import seed_foundry_governance  # lazy import: evita circolarità
+    seed_foundry_governance(conn)
 
 
 def _migrate_provider_calls_columns(conn: sqlite3.Connection) -> None:
