@@ -55,11 +55,22 @@ OVERALL_READY_REAL = "READY_REAL"
 OVERALL_NOT_READY = "NOT_READY"
 OVERALL_READY_SHADOW         = "READY_SHADOW"          # MF-ARCH-008: autonomy boundary attivo in shadow mode
 OVERALL_READY_MISSION_SHADOW = "READY_MISSION_SHADOW"  # MF-MISSION-001: mission layer attivo in shadow mode
+OVERALL_READY_REPLICATION_CONTRACT_SHADOW = "READY_REPLICATION_CONTRACT_SHADOW"  # MF-REPL-001
 
 # MF-MISSION-001: tabelle del Mission Layer
 MISSION_TABLES = {
     "missions",
     "mission_transitions",
+}
+
+# MF-REPL-001: tabelle del Replication Layer
+REPLICATION_TABLES = {
+    "dedicated_mercury_genesis_requests",
+    "dedicated_mercury_genesis_transitions",
+    "mercury_genetic_packages",
+    "dedicated_mercury_independence_contracts",
+    "product_family_assessments",
+    "replication_gate_results",
 }
 
 
@@ -108,10 +119,11 @@ def run_doctor(
     _check_approval_gate(report)
     _check_audit_log_module(report)
     autonomy_ok = _check_autonomy_boundary(report, db_path)
-    mission_ok = _check_mission_layer(report, db_path)  # MF-MISSION-001
+    mission_ok = _check_mission_layer(report, db_path)      # MF-MISSION-001
+    replication_ok = _check_replication_layer(report, db_path)  # MF-REPL-001
 
     report.overall_status = _compute_overall_status(
-        report, provider_is_simulated, autonomy_ok, mission_ok
+        report, provider_is_simulated, autonomy_ok, mission_ok, replication_ok
     )
     return report
 
@@ -641,16 +653,264 @@ def _check_mission_layer(
     return not any(c.status == STATUS_ERROR for c in mission_checks)
 
 
+def _check_replication_layer(
+    report: DoctorReport,
+    db_path: Path | str | None = None,
+) -> bool:
+    """MF-REPL-001: verifica il Replication Layer (Genesis Contract V0)."""
+    from mercury_foundry.replication.seed import (
+        REPLICATION_GOVERNANCE_KEY,
+        INITIAL_MANDATES as REPLICATION_MANDATES,
+    )
+    from mercury_foundry.autonomy.models import get_organ_by_key, list_mandates_for_organ
+    from mercury_foundry.replication.lifecycle import (
+        ALLOWED_TRANSITIONS as GENESIS_TRANSITIONS,
+        TERMINAL_STATUSES as GENESIS_TERMINAL_STATUSES,
+        V0_BLOCKED_TRANSITIONS,
+    )
+
+    path = Path(db_path) if db_path is not None else config.DEFAULT_DB_PATH
+    if not path.exists():
+        report.add("replication_schema", STATUS_ERROR, "DB non trovato")
+        return False
+
+    conn = sqlite3.connect(str(path))
+    conn.row_factory = sqlite3.Row
+
+    # --- 1. Tabelle presenti ---
+    existing = {
+        row["name"]
+        for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()
+    }
+    missing_tables = REPLICATION_TABLES - existing
+    if missing_tables:
+        report.add(
+            "replication_schema",
+            STATUS_ERROR,
+            f"Tabelle Replication mancanti: {sorted(missing_tables)}",
+        )
+        conn.close()
+        return False
+    report.add(
+        "replication_schema",
+        STATUS_OK,
+        f"Tutte le {len(REPLICATION_TABLES)} tabelle Replication presenti",
+    )
+
+    # --- 2. Indici presenti ---
+    idx_names = {
+        row["name"]
+        for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='index' "
+            "AND name LIKE 'idx_genesis%' OR name LIKE 'idx_genetic%' "
+            "OR name LIKE 'idx_independence%' OR name LIKE 'idx_family%' "
+            "OR name LIKE 'idx_gate%'"
+        ).fetchall()
+    }
+    required_indexes = {
+        "idx_genesis_requests_status",
+        "idx_genesis_requests_source_mission",
+        "idx_genesis_transitions_request_id",
+        "idx_genetic_packages_genesis_id",
+        "idx_independence_contracts_genesis_id",
+        "idx_family_assessments_genesis_id",
+        "idx_gate_results_genesis_id",
+    }
+    missing_idx = required_indexes - idx_names
+    if missing_idx:
+        report.add(
+            "replication_indexes",
+            STATUS_WARNING,
+            f"Indici Replication mancanti: {sorted(missing_idx)}",
+        )
+    else:
+        report.add("replication_indexes", STATUS_OK, f"{len(required_indexes)} indici Replication presenti")
+
+    # --- 3. REPLICATION_GOVERNANCE presente ---
+    organ = get_organ_by_key(conn, REPLICATION_GOVERNANCE_KEY)
+    if organ is None:
+        report.add(
+            "replication_governance_organ",
+            STATUS_ERROR,
+            f"Organo {REPLICATION_GOVERNANCE_KEY!r} non trovato nel DB",
+        )
+        conn.close()
+        return False
+    report.add(
+        "replication_governance_organ",
+        STATUS_OK,
+        f"Organo {REPLICATION_GOVERNANCE_KEY!r} presente (id={organ['id']})",
+    )
+
+    # --- 4. Mandati REPLICATION_GOVERNANCE presenti ---
+    mandates = list_mandates_for_organ(conn, organ["id"])
+    mandate_types = {m["decision_type"] for m in mandates}
+    expected_types = {dt for dt, _ in REPLICATION_MANDATES}
+    missing_mandates = expected_types - mandate_types
+    if missing_mandates:
+        report.add(
+            "replication_governance_mandates",
+            STATUS_ERROR,
+            f"Mandati REPLICATION_GOVERNANCE mancanti: {sorted(missing_mandates)}",
+        )
+        conn.close()
+        return False
+    report.add(
+        "replication_governance_mandates",
+        STATUS_OK,
+        f"Tutti i {len(expected_types)} mandati REPLICATION_GOVERNANCE presenti",
+    )
+
+    # --- 5. GENESIS_ACTIVATE = forbidden (V0 invariante) ---
+    activate_mandate = next(
+        (m for m in mandates if m["decision_type"] == "GENESIS_ACTIVATE"),
+        None,
+    )
+    if activate_mandate and activate_mandate["authority_mode"] == "forbidden":
+        report.add(
+            "replication_activation_forbidden",
+            STATUS_OK,
+            "GENESIS_ACTIVATE è forbidden: nessuna replica attivata automaticamente in V0",
+        )
+    else:
+        report.add(
+            "replication_activation_forbidden",
+            STATUS_ERROR,
+            "GENESIS_ACTIVATE non è forbidden: violazione dell'invariante V0",
+        )
+        conn.close()
+        return False
+
+    # --- 6. State machine valida ---
+    invalid_from_terminal = [
+        s for s in GENESIS_TERMINAL_STATUSES
+        if GENESIS_TRANSITIONS.get(s, frozenset()) - {s}
+    ]
+    if invalid_from_terminal:
+        report.add(
+            "replication_state_machine",
+            STATUS_ERROR,
+            f"Transizioni uscenti da stati terminali: {invalid_from_terminal}",
+        )
+        conn.close()
+        return False
+    report.add(
+        "replication_state_machine",
+        STATUS_OK,
+        f"State machine valida: {len(GENESIS_TRANSITIONS)} stati, "
+        f"{len(GENESIS_TERMINAL_STATUSES)} terminali senza uscite non-self",
+    )
+
+    # --- 7. V0 blocked transitions presenti ---
+    expected_blocked = {
+        ("ready_for_provisioning", "provisioning"),
+        ("provisioning", "activated"),
+    }
+    if V0_BLOCKED_TRANSITIONS >= expected_blocked:
+        report.add(
+            "replication_v0_blocked",
+            STATUS_OK,
+            f"V0 blocked transitions correttamente definite: {sorted(V0_BLOCKED_TRANSITIONS)}",
+        )
+    else:
+        missing_blocks = expected_blocked - V0_BLOCKED_TRANSITIONS
+        report.add(
+            "replication_v0_blocked",
+            STATUS_ERROR,
+            f"V0 blocked transitions mancanti: {sorted(missing_blocks)}",
+        )
+        conn.close()
+        return False
+
+    # --- 8. Feature flag activation disabled ---
+    if not config.REPLICATION_ACTIVATION_ENABLED:
+        report.add(
+            "replication_feature_flags",
+            STATUS_OK,
+            "REPLICATION_ACTIVATION_ENABLED=False (V0 default corretto)",
+        )
+    else:
+        report.add(
+            "replication_feature_flags",
+            STATUS_WARNING,
+            "REPLICATION_ACTIVATION_ENABLED=True: verificare che provisioning runtime sia pronto",
+        )
+
+    # --- 9. GenesisService importabile ---
+    try:
+        from mercury_foundry.replication.genesis_service import GenesisService
+        GenesisService()
+        report.add("replication_genesis_service", STATUS_OK, "GenesisService importabile")
+    except Exception as exc:
+        report.add(
+            "replication_genesis_service",
+            STATUS_ERROR,
+            f"GenesisService non importabile: {exc}",
+        )
+        conn.close()
+        return False
+
+    # --- 10. MotherReplicaFederationContract importabile ---
+    try:
+        from mercury_foundry.replication.models import MotherReplicaFederationContract
+        report.add("replication_federation_contract", STATUS_OK, "MotherReplicaFederationContract importabile")
+    except Exception as exc:
+        report.add(
+            "replication_federation_contract",
+            STATUS_ERROR,
+            f"MotherReplicaFederationContract non importabile: {exc}",
+        )
+        conn.close()
+        return False
+
+    # --- 11. IndependenceEvaluator importabile ---
+    try:
+        from mercury_foundry.replication.independence import evaluate_independence
+        report.add("replication_independence_evaluator", STATUS_OK, "IndependenceEvaluator importabile")
+    except Exception as exc:
+        report.add(
+            "replication_independence_evaluator",
+            STATUS_ERROR,
+            f"IndependenceEvaluator non importabile: {exc}",
+        )
+        conn.close()
+        return False
+
+    # --- 12. GeneticPackageBuilder importabile ---
+    try:
+        from mercury_foundry.replication.genetic_package import build_genetic_package
+        report.add("replication_genetic_package_builder", STATUS_OK, "build_genetic_package importabile")
+    except Exception as exc:
+        report.add(
+            "replication_genetic_package_builder",
+            STATUS_ERROR,
+            f"build_genetic_package non importabile: {exc}",
+        )
+        conn.close()
+        return False
+
+    conn.close()
+
+    replication_checks = [c for c in report.checks if c.name.startswith("replication_")]
+    return not any(c.status == STATUS_ERROR for c in replication_checks)
+
+
 def _compute_overall_status(
     report: DoctorReport,
     provider_is_simulated: bool | None,
     autonomy_ok: bool = False,
     mission_ok: bool = False,
+    replication_ok: bool = False,
 ) -> str:
     if report.has_errors():
         return OVERALL_NOT_READY
     if provider_is_simulated is None:
         return OVERALL_NOT_READY
+    # MF-REPL-001: READY_REPLICATION_CONTRACT_SHADOW prevale su READY_MISSION_SHADOW
+    if autonomy_ok and mission_ok and replication_ok:
+        return OVERALL_READY_REPLICATION_CONTRACT_SHADOW
     # MF-MISSION-001: READY_MISSION_SHADOW prevale su READY_SHADOW quando il
     # Mission Layer è correttamente inizializzato.
     if autonomy_ok and mission_ok:

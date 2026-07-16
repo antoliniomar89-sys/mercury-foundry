@@ -39,6 +39,44 @@ def init_schema(conn: sqlite3.Connection) -> None:
     _migrate_mission_indexes(conn)
     from mercury_foundry.mission.seed import seed_mission_control  # lazy import
     seed_mission_control(conn)
+    # MF-REPL-001: seeding idempotente di REPLICATION_GOVERNANCE con i 8 mandati
+    # iniziali. Va eseguito DOPO seed_mission_control.
+    _migrate_replication_indexes(conn)
+    from mercury_foundry.replication.seed import seed_replication_governance  # lazy import
+    seed_replication_governance(conn)
+
+
+def _migrate_replication_indexes(conn: sqlite3.Connection) -> None:
+    """Crea indici idempotenti per le tabelle Replication (MF-REPL-001)."""
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_genesis_requests_status "
+        "ON dedicated_mercury_genesis_requests(status)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_genesis_requests_source_mission "
+        "ON dedicated_mercury_genesis_requests(source_mission_id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_genesis_transitions_request_id "
+        "ON dedicated_mercury_genesis_transitions(genesis_request_id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_genetic_packages_genesis_id "
+        "ON mercury_genetic_packages(genesis_request_id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_independence_contracts_genesis_id "
+        "ON dedicated_mercury_independence_contracts(genesis_request_id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_family_assessments_genesis_id "
+        "ON product_family_assessments(genesis_request_id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_gate_results_genesis_id "
+        "ON replication_gate_results(genesis_request_id)"
+    )
+    conn.commit()
 
 
 def _migrate_mission_indexes(conn: sqlite3.Connection) -> None:

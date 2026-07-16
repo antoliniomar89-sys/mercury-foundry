@@ -279,6 +279,122 @@ CREATE TABLE IF NOT EXISTS mission_transitions (
     metadata_json                TEXT NOT NULL DEFAULT '{}'
 );
 
+-- ===========================================================================
+-- MF-REPL-001: Dedicated Mercury Genesis Contract V0
+-- ===========================================================================
+
+-- Richieste di genesis di una Dedicated Mercury.
+-- In V0: provisioning e activated non sono raggiungibili automaticamente.
+CREATE TABLE IF NOT EXISTS dedicated_mercury_genesis_requests (
+    id                          INTEGER PRIMARY KEY AUTOINCREMENT,
+    genesis_request_id          TEXT NOT NULL UNIQUE,
+    idempotency_key             TEXT NOT NULL UNIQUE,
+    correlation_id              TEXT NOT NULL,
+    source_mission_id           TEXT NOT NULL,
+    source_expedition_id        TEXT,
+    validated_product_ids_json  TEXT NOT NULL DEFAULT '[]',
+    product_family_key          TEXT,
+    proposed_instance_name      TEXT NOT NULL,
+    proposed_instance_slug      TEXT NOT NULL,
+    genesis_reason              TEXT NOT NULL,
+    validation_evidence_refs_json TEXT NOT NULL DEFAULT '[]',
+    product_validation_score    REAL,
+    pmf_confidence              REAL,
+    target_market               TEXT NOT NULL,
+    target_customer             TEXT NOT NULL,
+    business_model              TEXT NOT NULL,
+    constitutional_version      TEXT NOT NULL,
+    kernel_version              TEXT NOT NULL,
+    requested_genesis_profile   TEXT NOT NULL DEFAULT 'standard',
+    requested_capability_bundle_ids_json TEXT NOT NULL DEFAULT '[]',
+    requested_knowledge_package_ids_json TEXT NOT NULL DEFAULT '[]',
+    requested_budget_envelope   REAL NOT NULL DEFAULT 0.0,
+    requested_authority_profile_json  TEXT NOT NULL DEFAULT '{}',
+    requested_isolation_profile_json  TEXT NOT NULL DEFAULT '{}',
+    requested_federation_profile_json TEXT NOT NULL DEFAULT '{}',
+    requested_reporting_profile_json  TEXT NOT NULL DEFAULT '{}',
+    requested_parent_relationship_json TEXT NOT NULL DEFAULT '{}',
+    requested_by                TEXT NOT NULL,
+    requested_at                TEXT NOT NULL,
+    status                      TEXT NOT NULL DEFAULT 'draft',
+    created_at                  TEXT NOT NULL,
+    updated_at                  TEXT NOT NULL,
+    version                     INTEGER NOT NULL DEFAULT 1,
+    metadata_json               TEXT NOT NULL DEFAULT '{}'
+);
+
+-- Log immutabile delle transizioni di stato di ogni Genesis Request.
+CREATE TABLE IF NOT EXISTS dedicated_mercury_genesis_transitions (
+    id                           INTEGER PRIMARY KEY AUTOINCREMENT,
+    transition_id                TEXT NOT NULL UNIQUE,
+    genesis_request_id           TEXT NOT NULL REFERENCES dedicated_mercury_genesis_requests(genesis_request_id),
+    from_status                  TEXT NOT NULL,
+    to_status                    TEXT NOT NULL,
+    requested_by                 TEXT NOT NULL,
+    requested_at                 TEXT NOT NULL,
+    authorized_by                TEXT,
+    reason                       TEXT NOT NULL,
+    evidence_refs_json           TEXT NOT NULL DEFAULT '[]',
+    authority_decision_id        TEXT,
+    constitutional_validation_id TEXT,
+    correlation_id               TEXT NOT NULL,
+    metadata_json                TEXT NOT NULL DEFAULT '{}'
+);
+
+-- Pacchetti genetici serializzati, versionati, immutabili dopo approvazione.
+CREATE TABLE IF NOT EXISTS mercury_genetic_packages (
+    id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+    package_id              TEXT NOT NULL UNIQUE,
+    package_version         TEXT NOT NULL,
+    genesis_request_id      TEXT NOT NULL REFERENCES dedicated_mercury_genesis_requests(genesis_request_id),
+    source_instance_id      TEXT NOT NULL,
+    target_instance_id      TEXT,
+    status                  TEXT NOT NULL DEFAULT 'draft',  -- draft | sealed | invalid
+    checksum                TEXT NOT NULL,
+    package_json            TEXT NOT NULL,
+    generated_at            TEXT NOT NULL,
+    generated_by            TEXT NOT NULL,
+    created_at              TEXT NOT NULL
+);
+
+-- Contratti di indipendenza (Independence Contract).
+CREATE TABLE IF NOT EXISTS dedicated_mercury_independence_contracts (
+    id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+    contract_id             TEXT NOT NULL UNIQUE,
+    genesis_request_id      TEXT NOT NULL REFERENCES dedicated_mercury_genesis_requests(genesis_request_id),
+    instance_id             TEXT,
+    status                  TEXT NOT NULL DEFAULT 'not_assessed',
+    contract_json           TEXT NOT NULL,
+    evaluated_at            TEXT NOT NULL,
+    created_at              TEXT NOT NULL
+);
+
+-- Assessments di coerenza famiglia prodotti.
+CREATE TABLE IF NOT EXISTS product_family_assessments (
+    id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+    assessment_id           TEXT NOT NULL UNIQUE,
+    genesis_request_id      TEXT NOT NULL REFERENCES dedicated_mercury_genesis_requests(genesis_request_id),
+    coherence_score         REAL NOT NULL,
+    recommendation          TEXT NOT NULL,
+    assessment_json         TEXT NOT NULL,
+    evaluated_at            TEXT NOT NULL,
+    created_at              TEXT NOT NULL
+);
+
+-- Risultati del Replication Gate.
+CREATE TABLE IF NOT EXISTS replication_gate_results (
+    id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+    gate_result_id          TEXT NOT NULL UNIQUE,
+    genesis_request_id      TEXT NOT NULL REFERENCES dedicated_mercury_genesis_requests(genesis_request_id),
+    approved                INTEGER NOT NULL DEFAULT 0,
+    gate_status             TEXT NOT NULL,
+    validation_score        REAL NOT NULL,
+    independence_status     TEXT NOT NULL,
+    result_json             TEXT NOT NULL,
+    evaluated_at            TEXT NOT NULL,
+    created_at              TEXT NOT NULL
+);
+
 -- MF-FIX-007: trigger BEFORE UPDATE e BEFORE DELETE su audit_log sono installati
 -- via migrazione in `state.db._migrate_audit_log_triggers`, NON qui.
 -- Motivo: `conn.executescript()` divide il testo sulle `;` anche dentro i blocchi

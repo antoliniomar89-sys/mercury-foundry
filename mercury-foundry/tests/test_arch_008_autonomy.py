@@ -722,19 +722,20 @@ def test_existing_flow_submit_run_goal_unaffected_in_shadow_mode(tmp_path, monke
 
 
 def test_doctor_returns_ready_shadow(tmp_path):
-    """doctor restituisce READY_MISSION_SHADOW dopo MF-MISSION-001 (superset di READY_SHADOW).
+    """doctor restituisce READY_REPLICATION_CONTRACT_SHADOW dopo MF-REPL-001 (superset di READY_MISSION_SHADOW).
 
-    MF-ARCH-008 garantiva READY_SHADOW. MF-MISSION-001 lo eleva a
-    READY_MISSION_SHADOW quando anche il Mission Layer è inizializzato.
+    MF-ARCH-008 garantiva READY_SHADOW. MF-MISSION-001 lo elevava a READY_MISSION_SHADOW.
+    MF-REPL-001 lo eleva ulteriormente a READY_REPLICATION_CONTRACT_SHADOW quando anche
+    il Replication Layer è inizializzato.
     """
-    from mercury_foundry.diagnostics import run_doctor, OVERALL_READY_MISSION_SHADOW
+    from mercury_foundry.diagnostics import run_doctor, OVERALL_READY_REPLICATION_CONTRACT_SHADOW
 
     report = run_doctor(
         db_path=tmp_path / "mf.db",
         sandbox_root=tmp_path / "target",
         provider_name="fake",
     )
-    assert report.overall_status == OVERALL_READY_MISSION_SHADOW
+    assert report.overall_status == OVERALL_READY_REPLICATION_CONTRACT_SHADOW
     assert not report.has_errors()
 
     check_names = {c.name for c in report.checks}

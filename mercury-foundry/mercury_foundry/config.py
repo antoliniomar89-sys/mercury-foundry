@@ -105,3 +105,22 @@ CONSTITUTIONAL_CORE_MODE: str = _raw_const_mode
 # Default: constitution_v1.json distribuito con il package constitutional/.
 _CONSTITUTION_PATH_ENV = "MERCURY_CONSTITUTION_PATH"
 CONSTITUTION_PATH: str | None = os.environ.get(_CONSTITUTION_PATH_ENV)
+
+# ---------------------------------------------------------------------------
+# MF-REPL-001 — Replication Layer
+# ---------------------------------------------------------------------------
+
+# Feature flag: activation è forbidden in V0.
+# Impostare a "true" SOLO quando il provisioning runtime è stato implementato
+# (MF-GENESIS-001) e approvato dalla governance. Il valore default è False.
+_REPLICATION_ACTIVATION_ENABLED_ENV = "MERCURY_REPLICATION_ACTIVATION_ENABLED"
+REPLICATION_ACTIVATION_ENABLED: bool = (
+    os.environ.get(_REPLICATION_ACTIVATION_ENABLED_ENV, "false").lower() == "true"
+)
+
+# Feature flag: provisioning è disabilitato in V0.
+# Impostare a "true" SOLO insieme a REPLICATION_ACTIVATION_ENABLED.
+_REPLICATION_PROVISIONING_ENABLED_ENV = "MERCURY_REPLICATION_PROVISIONING_ENABLED"
+REPLICATION_PROVISIONING_ENABLED: bool = (
+    os.environ.get(_REPLICATION_PROVISIONING_ENABLED_ENV, "false").lower() == "true"
+)

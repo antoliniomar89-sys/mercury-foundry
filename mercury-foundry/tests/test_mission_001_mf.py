@@ -987,9 +987,9 @@ def test_45_existing_287_tests_not_broken(tmp_path):
 
 def test_46_doctor_constitutional_invariant(tmp_path):
     """46 — Doctor non regredisce dopo MF-MISSION-001."""
-    from mercury_foundry.diagnostics import run_doctor, OVERALL_READY_MISSION_SHADOW
+    from mercury_foundry.diagnostics import run_doctor, OVERALL_READY_REPLICATION_CONTRACT_SHADOW
     report = run_doctor()
-    assert report.overall_status == OVERALL_READY_MISSION_SHADOW
+    assert report.overall_status == OVERALL_READY_REPLICATION_CONTRACT_SHADOW
 
 
 def test_47_shadow_constitutional_does_not_block(tmp_path, monkeypatch):
