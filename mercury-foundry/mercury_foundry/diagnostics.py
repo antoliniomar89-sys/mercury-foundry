@@ -56,6 +56,7 @@ OVERALL_NOT_READY = "NOT_READY"
 OVERALL_READY_SHADOW         = "READY_SHADOW"          # MF-ARCH-008: autonomy boundary attivo in shadow mode
 OVERALL_READY_MISSION_SHADOW = "READY_MISSION_SHADOW"  # MF-MISSION-001: mission layer attivo in shadow mode
 OVERALL_READY_REPLICATION_CONTRACT_SHADOW = "READY_REPLICATION_CONTRACT_SHADOW"  # MF-REPL-001
+OVERALL_READY_OUTCOME_SHADOW = "READY_OUTCOME_SHADOW"  # MF-OUTCOME-001
 
 # MF-MISSION-001: tabelle del Mission Layer
 MISSION_TABLES = {
@@ -71,6 +72,16 @@ REPLICATION_TABLES = {
     "dedicated_mercury_independence_contracts",
     "product_family_assessments",
     "replication_gate_results",
+}
+
+# MF-OUTCOME-001: tabelle dell'Economic Outcome Governance
+OUTCOME_TABLES = {
+    "economic_outcome_plans",
+    "outcome_metric_snapshots",
+    "resource_envelopes",
+    "resource_consumptions",
+    "outcome_decisions",
+    "outcome_transition_records",
 }
 
 
@@ -121,9 +132,10 @@ def run_doctor(
     autonomy_ok = _check_autonomy_boundary(report, db_path)
     mission_ok = _check_mission_layer(report, db_path)      # MF-MISSION-001
     replication_ok = _check_replication_layer(report, db_path)  # MF-REPL-001
+    outcome_ok = _check_outcome_layer(report, db_path)          # MF-OUTCOME-001
 
     report.overall_status = _compute_overall_status(
-        report, provider_is_simulated, autonomy_ok, mission_ok, replication_ok
+        report, provider_is_simulated, autonomy_ok, mission_ok, replication_ok, outcome_ok
     )
     return report
 
@@ -897,17 +909,234 @@ def _check_replication_layer(
     return not any(c.status == STATUS_ERROR for c in replication_checks)
 
 
+def _check_outcome_layer(
+    report: DoctorReport,
+    db_path: Path | str | None = None,
+) -> bool:
+    """Verifica il layer Economic Outcome Governance (MF-OUTCOME-001).
+
+    Ritorna True se tutti i check obbligatori passano.
+    """
+    path = Path(db_path) if db_path is not None else config.DEFAULT_DB_PATH
+    if not path.exists():
+        report.add("outcome_schema", STATUS_ERROR, "DB non trovato — impossibile verificare outcome layer")
+        return False
+
+    conn = sqlite3.connect(str(path))
+    conn.row_factory = sqlite3.Row
+
+    # --- 1. Schema tabelle outcome presenti ---
+    tables = {r["name"] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+    missing = OUTCOME_TABLES - tables
+    if missing:
+        report.add(
+            "outcome_schema",
+            STATUS_ERROR,
+            f"Tabelle outcome mancanti: {sorted(missing)}",
+        )
+        conn.close()
+        return False
+    report.add(
+        "outcome_schema",
+        STATUS_OK,
+        f"Schema outcome presente: {sorted(OUTCOME_TABLES)}",
+    )
+
+    # --- 2. Indici su mission_id e status presenti ---
+    indexes = {r["name"] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='index'").fetchall()}
+    expected_indexes = {
+        "idx_outcome_plans_mission_id",
+        "idx_outcome_plans_status",
+        "idx_outcome_decisions_plan_id",
+        "idx_resource_envelopes_mission_id",
+    }
+    missing_indexes = expected_indexes - indexes
+    if missing_indexes:
+        report.add(
+            "outcome_indexes",
+            STATUS_WARNING,
+            f"Indici outcome mancanti (non critici): {sorted(missing_indexes)}",
+        )
+    else:
+        report.add(
+            "outcome_indexes",
+            STATUS_OK,
+            f"Indici outcome presenti: {len(expected_indexes)} indici verificati",
+        )
+
+    # --- 3. ECONOMIC_GOVERNANCE organ presente ---
+    organ = conn.execute(
+        "SELECT id FROM organs WHERE organ_key = 'ECONOMIC_GOVERNANCE'",
+    ).fetchone()
+    if organ is None:
+        report.add("outcome_governance_organ", STATUS_ERROR, "Organo ECONOMIC_GOVERNANCE non trovato")
+        conn.close()
+        return False
+    report.add("outcome_governance_organ", STATUS_OK, "ECONOMIC_GOVERNANCE presente nel DB")
+    organ_id = organ["id"]
+
+    # --- 4. Mandati ECONOMIC_GOVERNANCE presenti (8 attesi) ---
+    mandates = conn.execute(
+        "SELECT decision_type, authority_mode FROM decision_mandates WHERE organ_id = ?",
+        (organ_id,),
+    ).fetchall()
+    mandate_map = {m["decision_type"]: m["authority_mode"] for m in mandates}
+    expected_mandates = {
+        "OUTCOME_PLAN_CREATE":     "proposal",
+        "RESOURCE_ALLOCATE":       "escalation_required",
+        "RESOURCE_CONSUME":        "proposal",
+        "OUTCOME_EVALUATE":        "proposal",
+        "OUTCOME_PAUSE":           "proposal",
+        "OUTCOME_STOP":            "escalation_required",
+        "OUTCOME_SCALE_PROPOSE":   "proposal",
+        "OUTCOME_BUDGET_INCREASE": "forbidden",
+    }
+    mandate_errors: list[str] = []
+    for dt, mode in expected_mandates.items():
+        if dt not in mandate_map:
+            mandate_errors.append(f"{dt} mancante")
+        elif mandate_map[dt] != mode:
+            mandate_errors.append(f"{dt}: atteso {mode!r}, trovato {mandate_map[dt]!r}")
+    if mandate_errors:
+        report.add(
+            "outcome_governance_mandates",
+            STATUS_ERROR,
+            f"Mandati ECONOMIC_GOVERNANCE errati: {mandate_errors}",
+        )
+        conn.close()
+        return False
+    report.add(
+        "outcome_governance_mandates",
+        STATUS_OK,
+        f"8 mandati ECONOMIC_GOVERNANCE verificati (OUTCOME_BUDGET_INCREASE=forbidden)",
+    )
+
+    # --- 5. Budget increase forbidden (invariante V0) ---
+    bi_mandate = mandate_map.get("OUTCOME_BUDGET_INCREASE")
+    if bi_mandate == "forbidden":
+        report.add(
+            "outcome_budget_increase_forbidden",
+            STATUS_OK,
+            "OUTCOME_BUDGET_INCREASE=forbidden (V0 invariante corretto)",
+        )
+    else:
+        report.add(
+            "outcome_budget_increase_forbidden",
+            STATUS_ERROR,
+            f"OUTCOME_BUDGET_INCREASE deve essere forbidden, trovato: {bi_mandate!r}",
+        )
+        conn.close()
+        return False
+
+    # --- 6. Feature flags: auto_scale e auto_budget_increase disabilitati ---
+    if not config.OUTCOME_AUTO_SCALE_ENABLED:
+        report.add(
+            "outcome_no_auto_scale",
+            STATUS_OK,
+            "OUTCOME_AUTO_SCALE_ENABLED=False (V0 default corretto)",
+        )
+    else:
+        report.add(
+            "outcome_no_auto_scale",
+            STATUS_WARNING,
+            "OUTCOME_AUTO_SCALE_ENABLED=True: verificare che scale automatico sia intenzionale",
+        )
+
+    if not config.OUTCOME_AUTO_BUDGET_INCREASE_ENABLED:
+        report.add(
+            "outcome_no_auto_budget_increase",
+            STATUS_OK,
+            "OUTCOME_AUTO_BUDGET_INCREASE_ENABLED=False (V0 default corretto)",
+        )
+    else:
+        report.add(
+            "outcome_no_auto_budget_increase",
+            STATUS_ERROR,
+            "OUTCOME_AUTO_BUDGET_INCREASE_ENABLED=True: violazione invariante V0",
+        )
+        conn.close()
+        return False
+
+    # --- 7. OutcomeScorer importabile ---
+    try:
+        from mercury_foundry.outcome.scoring import OutcomeScorer
+        _s = OutcomeScorer()
+        report.add("outcome_scorer", STATUS_OK, "OutcomeScorer importabile e istanziabile")
+    except Exception as exc:
+        report.add("outcome_scorer", STATUS_ERROR, f"OutcomeScorer non importabile: {exc}")
+        conn.close()
+        return False
+
+    # --- 8. PolicyEvaluator importabile ---
+    try:
+        from mercury_foundry.outcome.policy import OutcomePolicyEvaluator
+        _p = OutcomePolicyEvaluator()
+        report.add("outcome_policy_evaluator", STATUS_OK, "OutcomePolicyEvaluator importabile e istanziabile")
+    except Exception as exc:
+        report.add("outcome_policy_evaluator", STATUS_ERROR, f"OutcomePolicyEvaluator non importabile: {exc}")
+        conn.close()
+        return False
+
+    # --- 9. Registry inizializzabile ---
+    try:
+        from mercury_foundry.outcome.registry import list_outcome_plans
+        list_outcome_plans(conn, limit=1)
+        report.add("outcome_registry", STATUS_OK, "Registry outcome inizializzabile")
+    except Exception as exc:
+        report.add("outcome_registry", STATUS_ERROR, f"Registry outcome non funzionante: {exc}")
+        conn.close()
+        return False
+
+    # --- 10. ResourceAllocator importabile ---
+    try:
+        from mercury_foundry.outcome.allocator import ResourceAllocator
+        _a = ResourceAllocator()
+        report.add("outcome_resource_allocator", STATUS_OK, "ResourceAllocator importabile e istanziabile")
+    except Exception as exc:
+        report.add("outcome_resource_allocator", STATUS_ERROR, f"ResourceAllocator non importabile: {exc}")
+        conn.close()
+        return False
+
+    # --- 11. Mission integration presente ---
+    try:
+        from mercury_foundry.outcome.service import OutcomeService
+        _svc = OutcomeService()
+        report.add("outcome_mission_integration", STATUS_OK, "OutcomeService importabile (Mission integration)")
+    except Exception as exc:
+        report.add("outcome_mission_integration", STATUS_ERROR, f"OutcomeService non importabile: {exc}")
+        conn.close()
+        return False
+
+    # --- 12. Constitutional Core raggiungibile ---
+    try:
+        from mercury_foundry.constitutional.shadow import maybe_validate_constitution
+        report.add("outcome_constitutional_core", STATUS_OK, "Constitutional Core raggiungibile da outcome layer")
+    except Exception as exc:
+        report.add("outcome_constitutional_core", STATUS_ERROR, f"Constitutional Core non raggiungibile: {exc}")
+        conn.close()
+        return False
+
+    conn.close()
+
+    outcome_checks = [c for c in report.checks if c.name.startswith("outcome_")]
+    return not any(c.status == STATUS_ERROR for c in outcome_checks)
+
+
 def _compute_overall_status(
     report: DoctorReport,
     provider_is_simulated: bool | None,
     autonomy_ok: bool = False,
     mission_ok: bool = False,
     replication_ok: bool = False,
+    outcome_ok: bool = False,
 ) -> str:
     if report.has_errors():
         return OVERALL_NOT_READY
     if provider_is_simulated is None:
         return OVERALL_NOT_READY
+    # MF-OUTCOME-001: READY_OUTCOME_SHADOW è il livello più alto
+    if autonomy_ok and mission_ok and replication_ok and outcome_ok:
+        return OVERALL_READY_OUTCOME_SHADOW
     # MF-REPL-001: READY_REPLICATION_CONTRACT_SHADOW prevale su READY_MISSION_SHADOW
     if autonomy_ok and mission_ok and replication_ok:
         return OVERALL_READY_REPLICATION_CONTRACT_SHADOW

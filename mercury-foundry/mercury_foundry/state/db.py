@@ -44,6 +44,52 @@ def init_schema(conn: sqlite3.Connection) -> None:
     _migrate_replication_indexes(conn)
     from mercury_foundry.replication.seed import seed_replication_governance  # lazy import
     seed_replication_governance(conn)
+    # MF-OUTCOME-001: seeding idempotente di ECONOMIC_GOVERNANCE con gli 8 mandati
+    # iniziali. Va eseguito DOPO seed_replication_governance.
+    _migrate_outcome_indexes(conn)
+    from mercury_foundry.outcome.seed import seed_economic_governance  # lazy import
+    seed_economic_governance(conn)
+
+
+def _migrate_outcome_indexes(conn: sqlite3.Connection) -> None:
+    """Crea indici idempotenti per le tabelle Outcome (MF-OUTCOME-001)."""
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_outcome_plans_mission_id "
+        "ON economic_outcome_plans(mission_id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_outcome_plans_status "
+        "ON economic_outcome_plans(status)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_outcome_plans_priority "
+        "ON economic_outcome_plans(priority_class)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_outcome_snapshots_plan_id "
+        "ON outcome_metric_snapshots(outcome_plan_id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_resource_envelopes_mission_id "
+        "ON resource_envelopes(mission_id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_resource_consumptions_envelope_id "
+        "ON resource_consumptions(envelope_id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_outcome_decisions_plan_id "
+        "ON outcome_decisions(outcome_plan_id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_outcome_decisions_decided_at "
+        "ON outcome_decisions(decided_at)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_outcome_transitions_plan_id "
+        "ON outcome_transition_records(outcome_plan_id)"
+    )
+    conn.commit()
 
 
 def _migrate_replication_indexes(conn: sqlite3.Connection) -> None:

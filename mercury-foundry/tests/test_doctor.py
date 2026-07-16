@@ -4,7 +4,7 @@ from mercury_foundry.diagnostics import (
     OVERALL_NOT_READY,
     OVERALL_READY_MISSION_SHADOW,
     OVERALL_READY_REAL,
-    OVERALL_READY_REPLICATION_CONTRACT_SHADOW,
+    OVERALL_READY_OUTCOME_SHADOW,
     OVERALL_READY_SHADOW,
     OVERALL_READY_SIMULATED,
     run_doctor,
@@ -20,7 +20,7 @@ def test_doctor_healthy_simulated_mode_reports_ready_simulated(tmp_path):
 
     # MF-REPL-001: il doctor restituisce READY_REPLICATION_CONTRACT_SHADOW quando
     # Autonomy, Mission e Replication Layer sono tutti inizializzati.
-    assert report.overall_status == OVERALL_READY_REPLICATION_CONTRACT_SHADOW
+    assert report.overall_status == OVERALL_READY_OUTCOME_SHADOW
     assert not report.has_errors()
 
     names = {c.name for c in report.checks}
@@ -122,7 +122,7 @@ def test_doctor_real_provider_fully_configured_is_ready_real(tmp_path, monkeypat
 
     # MF-REPL-001: READY_REPLICATION_CONTRACT_SHADOW prevale su READY_MISSION_SHADOW
     # quando Autonomy, Mission e Replication Layer sono tutti attivi.
-    assert report.overall_status == OVERALL_READY_REPLICATION_CONTRACT_SHADOW
+    assert report.overall_status == OVERALL_READY_OUTCOME_SHADOW
     provider_check = next(c for c in report.checks if c.name == "ai_provider")
     assert provider_check.status == "ok"
     assert "sk-test-doctor-check" not in provider_check.detail

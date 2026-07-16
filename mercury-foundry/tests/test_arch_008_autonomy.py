@@ -728,14 +728,14 @@ def test_doctor_returns_ready_shadow(tmp_path):
     MF-REPL-001 lo eleva ulteriormente a READY_REPLICATION_CONTRACT_SHADOW quando anche
     il Replication Layer è inizializzato.
     """
-    from mercury_foundry.diagnostics import run_doctor, OVERALL_READY_REPLICATION_CONTRACT_SHADOW
+    from mercury_foundry.diagnostics import run_doctor, OVERALL_READY_OUTCOME_SHADOW
 
     report = run_doctor(
         db_path=tmp_path / "mf.db",
         sandbox_root=tmp_path / "target",
         provider_name="fake",
     )
-    assert report.overall_status == OVERALL_READY_REPLICATION_CONTRACT_SHADOW
+    assert report.overall_status == OVERALL_READY_OUTCOME_SHADOW
     assert not report.has_errors()
 
     check_names = {c.name for c in report.checks}

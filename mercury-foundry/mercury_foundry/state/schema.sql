@@ -395,6 +395,132 @@ CREATE TABLE IF NOT EXISTS replication_gate_results (
     created_at              TEXT NOT NULL
 );
 
+-- ============================================================
+-- MF-OUTCOME-001: Economic Outcome Governance V0
+-- ============================================================
+
+-- Piano di outcome economico associato a una Mission.
+CREATE TABLE IF NOT EXISTS economic_outcome_plans (
+    id                        INTEGER PRIMARY KEY AUTOINCREMENT,
+    outcome_plan_id           TEXT NOT NULL UNIQUE,
+    mission_id                TEXT NOT NULL,
+    correlation_id            TEXT NOT NULL,
+    objective                 TEXT NOT NULL,
+    primary_metric            TEXT NOT NULL,
+    target_value              REAL NOT NULL,
+    target_operator           TEXT NOT NULL,
+    maximum_cost_minor        INTEGER NOT NULL DEFAULT 0,
+    maximum_duration_seconds  INTEGER NOT NULL DEFAULT 0,
+    review_interval_seconds   INTEGER NOT NULL DEFAULT 0,
+    kill_deadline             TEXT NOT NULL,
+    minimum_evidence_count    INTEGER NOT NULL DEFAULT 0,
+    strategic_value_score     REAL NOT NULL DEFAULT 0.0,
+    learning_value_score      REAL NOT NULL DEFAULT 0.0,
+    reversibility             TEXT NOT NULL DEFAULT 'reversible',
+    created_by                TEXT NOT NULL,
+    created_at                TEXT NOT NULL,
+    updated_at                TEXT NOT NULL,
+    version                   INTEGER NOT NULL DEFAULT 1,
+    status                    TEXT NOT NULL DEFAULT 'planned',
+    priority_class            TEXT NOT NULL DEFAULT 'normal',
+    currency                  TEXT,
+    expected_revenue_minor    INTEGER,
+    expected_profit_minor     INTEGER,
+    scale_threshold           REAL,
+    stop_threshold            REAL,
+    rollback_plan             TEXT,
+    metadata_json             TEXT NOT NULL DEFAULT '{}'
+);
+
+-- Snapshot di metriche economiche per una Mission (append-only).
+CREATE TABLE IF NOT EXISTS outcome_metric_snapshots (
+    id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+    snapshot_id           TEXT NOT NULL UNIQUE,
+    outcome_plan_id       TEXT NOT NULL REFERENCES economic_outcome_plans(outcome_plan_id),
+    mission_id            TEXT NOT NULL,
+    measured_at           TEXT NOT NULL,
+    revenue_minor         INTEGER NOT NULL DEFAULT 0,
+    cost_minor            INTEGER NOT NULL DEFAULT 0,
+    profit_minor          INTEGER NOT NULL DEFAULT 0,
+    elapsed_seconds       INTEGER NOT NULL DEFAULT 0,
+    evidence_count        INTEGER NOT NULL DEFAULT 0,
+    customer_count        INTEGER NOT NULL DEFAULT 0,
+    knowledge_gain_score  REAL NOT NULL DEFAULT 0.0,
+    risk_score            REAL NOT NULL DEFAULT 0.0,
+    conversion_rate       REAL,
+    delivery_success_rate REAL,
+    metadata_json         TEXT NOT NULL DEFAULT '{}'
+);
+
+-- Envelope di risorse allocate a una Mission.
+CREATE TABLE IF NOT EXISTS resource_envelopes (
+    id                            INTEGER PRIMARY KEY AUTOINCREMENT,
+    envelope_id                   TEXT NOT NULL UNIQUE,
+    mission_id                    TEXT NOT NULL,
+    budget_minor                  INTEGER NOT NULL DEFAULT 0,
+    compute_units                 INTEGER NOT NULL DEFAULT 0,
+    llm_token_limit               INTEGER NOT NULL DEFAULT 0,
+    external_service_limit_minor  INTEGER NOT NULL DEFAULT 0,
+    human_minutes_limit           INTEGER NOT NULL DEFAULT 0,
+    deadline                      TEXT NOT NULL,
+    allocated_at                  TEXT NOT NULL,
+    allocated_by                  TEXT NOT NULL,
+    version                       INTEGER NOT NULL DEFAULT 1,
+    metadata_json                 TEXT NOT NULL DEFAULT '{}'
+);
+
+-- Registrazioni di consumo risorse (append-only, idempotente).
+CREATE TABLE IF NOT EXISTS resource_consumptions (
+    id                           INTEGER PRIMARY KEY AUTOINCREMENT,
+    consumption_id               TEXT NOT NULL UNIQUE,
+    envelope_id                  TEXT NOT NULL REFERENCES resource_envelopes(envelope_id),
+    mission_id                   TEXT NOT NULL,
+    cost_minor                   INTEGER NOT NULL DEFAULT 0,
+    compute_units                INTEGER NOT NULL DEFAULT 0,
+    llm_tokens                   INTEGER NOT NULL DEFAULT 0,
+    external_service_cost_minor  INTEGER NOT NULL DEFAULT 0,
+    human_minutes                INTEGER NOT NULL DEFAULT 0,
+    recorded_at                  TEXT NOT NULL,
+    source_ref                   TEXT NOT NULL,
+    idempotency_key              TEXT NOT NULL UNIQUE,
+    metadata_json                TEXT NOT NULL DEFAULT '{}'
+);
+
+-- Decisioni di outcome (immutabili dopo INSERT).
+CREATE TABLE IF NOT EXISTS outcome_decisions (
+    id                            INTEGER PRIMARY KEY AUTOINCREMENT,
+    decision_id                   TEXT NOT NULL UNIQUE,
+    mission_id                    TEXT NOT NULL,
+    outcome_plan_id               TEXT NOT NULL REFERENCES economic_outcome_plans(outcome_plan_id),
+    decision_type                 TEXT NOT NULL,
+    score                         REAL NOT NULL DEFAULT 0.0,
+    confidence                    REAL NOT NULL DEFAULT 0.0,
+    reasons_json                  TEXT NOT NULL DEFAULT '[]',
+    blockers_json                 TEXT NOT NULL DEFAULT '[]',
+    required_actions_json         TEXT NOT NULL DEFAULT '[]',
+    decided_at                    TEXT NOT NULL,
+    correlation_id                TEXT NOT NULL,
+    authority_decision_id         TEXT,
+    constitutional_validation_id  TEXT,
+    metadata_json                 TEXT NOT NULL DEFAULT '{}'
+);
+
+-- Log di transizioni di stato OutcomePlan (append-only).
+CREATE TABLE IF NOT EXISTS outcome_transition_records (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    transition_id   TEXT NOT NULL UNIQUE,
+    outcome_plan_id TEXT NOT NULL REFERENCES economic_outcome_plans(outcome_plan_id),
+    mission_id      TEXT NOT NULL,
+    from_status     TEXT NOT NULL,
+    to_status       TEXT NOT NULL,
+    requested_by    TEXT NOT NULL,
+    requested_at    TEXT NOT NULL,
+    reason          TEXT NOT NULL,
+    correlation_id  TEXT NOT NULL,
+    decision_id     TEXT,
+    metadata_json   TEXT NOT NULL DEFAULT '{}'
+);
+
 -- MF-FIX-007: trigger BEFORE UPDATE e BEFORE DELETE su audit_log sono installati
 -- via migrazione in `state.db._migrate_audit_log_triggers`, NON qui.
 -- Motivo: `conn.executescript()` divide il testo sulle `;` anche dentro i blocchi

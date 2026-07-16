@@ -915,13 +915,13 @@ def test_64_emit_replication_event_stored(db):
 
 def test_65_doctor_returns_ready_replication_contract_shadow(tmp_path):
     """65 — Doctor restituisce READY_REPLICATION_CONTRACT_SHADOW dopo MF-REPL-001."""
-    from mercury_foundry.diagnostics import run_doctor, OVERALL_READY_REPLICATION_CONTRACT_SHADOW
+    from mercury_foundry.diagnostics import run_doctor, OVERALL_READY_OUTCOME_SHADOW
     report = run_doctor(
         db_path=tmp_path / "mf_repl.db",
         sandbox_root=tmp_path / "target",
         provider_name="fake",
     )
-    assert report.overall_status == OVERALL_READY_REPLICATION_CONTRACT_SHADOW
+    assert report.overall_status == OVERALL_READY_OUTCOME_SHADOW
     assert not report.has_errors()
 
     check_names = {c.name for c in report.checks}

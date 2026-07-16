@@ -124,3 +124,21 @@ _REPLICATION_PROVISIONING_ENABLED_ENV = "MERCURY_REPLICATION_PROVISIONING_ENABLE
 REPLICATION_PROVISIONING_ENABLED: bool = (
     os.environ.get(_REPLICATION_PROVISIONING_ENABLED_ENV, "false").lower() == "true"
 )
+
+# ---------------------------------------------------------------------------
+# MF-OUTCOME-001 — Economic Outcome Governance
+# ---------------------------------------------------------------------------
+
+# Feature flag: scale automatico mai consentito in V0.
+# OUTCOME_SCALE_PROPOSE produce solo una proposta (non modifica il budget).
+_OUTCOME_AUTO_SCALE_ENABLED_ENV = "MERCURY_OUTCOME_AUTO_SCALE_ENABLED"
+OUTCOME_AUTO_SCALE_ENABLED: bool = (
+    os.environ.get(_OUTCOME_AUTO_SCALE_ENABLED_ENV, "false").lower() == "true"
+)
+
+# Feature flag: aumento automatico del budget mai consentito in V0.
+# OUTCOME_BUDGET_INCREASE è forbidden nel mandato ECONOMIC_GOVERNANCE.
+_OUTCOME_AUTO_BUDGET_INCREASE_ENV = "MERCURY_OUTCOME_AUTO_BUDGET_INCREASE_ENABLED"
+OUTCOME_AUTO_BUDGET_INCREASE_ENABLED: bool = (
+    os.environ.get(_OUTCOME_AUTO_BUDGET_INCREASE_ENV, "false").lower() == "true"
+)
