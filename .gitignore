@@ -53,3 +53,8 @@ __pycache__/
 *.pyc
 .pytest_cache/
 mercury-foundry/data/*.db
+
+# Agent memory — internal operational state, never commit
+.agents/
+# Operation log assets — session prompts and instructions, never commit
+attached_assets/
