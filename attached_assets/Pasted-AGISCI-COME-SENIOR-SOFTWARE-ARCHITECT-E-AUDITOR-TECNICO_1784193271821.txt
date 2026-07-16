@@ -1,0 +1,202 @@
+AGISCI COME SENIOR SOFTWARE ARCHITECT E AUDITOR TECNICO.
+
+Devi eseguire un audit completo e verificabile del repository Mercury Foundry attualmente aperto.
+
+OBIETTIVO
+Determinare lo stato reale del codice prima di qualsiasi nuova implementazione.
+
+NON MODIFICARE NESSUN FILE.
+NON FARE REFACTOR.
+NON INSTALLARE DIPENDENZE NON NECESSARIE.
+NON CORREGGERE ERRORI.
+LIMITATI AD ANALIZZARE, ESEGUIRE I TEST ESISTENTI E PRODURRE UN REPORT.
+
+AUDIT RICHIESTO
+
+1. STRUTTURA REPOSITORY
+- Elenca le directory e i file principali.
+- Identifica il vero entrypoint.
+- Identifica eventuali progetti annidati.
+- Distingui codice attivo, template, residui Replit e file probabilmente inutilizzati.
+- Verifica se convivono stack Python e TypeScript e se sono realmente collegati.
+
+2. PACKAGING E AVVIO
+- Analizza pyproject.toml, package.json, lockfile, config Replit e script di avvio.
+- Determina il comando corretto per installare, testare ed eseguire il progetto.
+- Segnala configurazioni incoerenti o placeholder.
+
+3. TEST RUNTIME
+Esegui, adattando solo il percorso se necessario:
+
+python3 -m mercury_foundry.cli doctor
+python3 -m pytest -q
+
+Se questi comandi falliscono:
+- non correggere;
+- prova a individuare il corretto working directory;
+- riesegui dal percorso corretto;
+- registra esattamente comando, exit code ed errore.
+
+4. ARCHITETTURA
+Verifica l’esistenza e lo stato di:
+- orchestrator;
+- builder;
+- evaluator;
+- fix loop;
+- state machine;
+- SQLite repository;
+- audit log;
+- sandbox;
+- staging;
+- approval gate;
+- policy;
+- provider fake;
+- provider AI reale;
+- CLI;
+- API eventuale.
+
+Per ogni componente assegna:
+- FUNZIONANTE;
+- PARZIALE;
+- ASSENTE;
+- NON UTILIZZATO;
+- NON VERIFICABILE.
+
+5. WORKFLOW END-TO-END
+Ricostruisci il flusso reale del sistema dal comando iniziale fino alla candidate finale.
+
+Verifica se il ciclo dichiarato:
+SPEC → PLAN → BUILD → TEST → FIX → VERIFY → CANDIDATE
+
+è realmente implementato e collegato.
+
+Indica:
+- input iniziale;
+- oggetti prodotti;
+- persistenza;
+- test eseguiti;
+- condizioni di retry;
+- numero massimo di tentativi;
+- condizione di approvazione;
+- output finale.
+
+6. PROVIDER AI
+- Identifica tutti i provider disponibili.
+- Verifica come viene selezionato il provider.
+- Verifica se esistono fallback silenziosi.
+- Verifica gestione di API key, timeout, errori, structured output, token e costi.
+- Non effettuare chiamate a pagamento.
+- Se esiste un test mockato del provider reale, eseguilo.
+- Distingui chiaramente: implementato, testato con mock, testato realmente.
+
+7. SICUREZZA
+Controlla:
+- path traversal;
+- scrittura fuori sandbox;
+- command execution;
+- gestione segreti;
+- file sensibili tracciati;
+- audit immutabile;
+- candidate integrity;
+- approval bypass;
+- fallback non sicuri;
+- input non validati;
+- dipendenze vulnerabili evidenti.
+
+Non eseguire operazioni distruttive.
+
+8. TEST COVERAGE FUNZIONALE
+Non limitarti al numero di test.
+
+Mappa i test esistenti rispetto a:
+- build;
+- evaluator;
+- fix loop;
+- provider;
+- sandbox;
+- approval;
+- audit;
+- state;
+- end-to-end;
+- failure handling.
+
+Indica i comportamenti critici non coperti.
+
+9. BUSINESS CORE
+Verifica se nel codice esistono già, anche con nomi diversi:
+- Opportunity Record;
+- Evidence Packet;
+- Problem Cluster;
+- Mercury Judge economico;
+- scoring commerciale;
+- GO / TEST / NO_GO;
+- budget allocation;
+- Build Brief;
+- Sales Engine;
+- Payment;
+- Customer Delivery;
+- ricavi, costi e margini;
+- KILL / ITERATE / SCALE;
+- Learning economico;
+- Venture Cell.
+
+Non confondere policy tecnica, evaluator tecnico o orchestrator con il Mercury Brain economico.
+
+10. DEBITO TECNICO E DUPLICAZIONI
+Identifica:
+- file duplicati;
+- moduli sovrapposti;
+- codice morto;
+- configurazioni obsolete;
+- naming incoerente;
+- due source of truth;
+- dipendenze superflue;
+- documentazione non allineata al codice.
+
+11. GIT STATUS
+Esegui:
+git status --short
+git branch --show-current
+git log --oneline -10
+
+Non fare commit, push, reset o checkout.
+
+12. REPORT FINALE
+Crea un file nella root chiamato:
+
+AUDIT_REPORT.md
+
+Il report deve contenere obbligatoriamente:
+
+A. Executive summary
+B. Comandi eseguiti con exit code
+C. Struttura reale del repository
+D. Componenti FUNZIONANTI / PARZIALI / ASSENTI / NON UTILIZZATI
+E. Esito test
+F. Workflow end-to-end ricostruito
+G. Sicurezza
+H. Provider AI
+I. Business Core presente o assente
+J. Debito tecnico
+K. Blocchi critici
+L. Rischi ordinati per gravità
+M. File da non toccare
+N. File candidati alla pulizia
+O. Raccomandazione della prossima singola implementazione
+P. Confidenza dell’audit da 0 a 100%
+
+Alla fine mostra in chat:
+- sintesi di massimo 20 righe;
+- percorso del report;
+- numero test passati, falliti e saltati;
+- comando esatto per riprodurre l’audit;
+- nessuna proposta di modifica oltre alla singola prossima implementazione raccomandata.
+
+IMPORTANTE
+Non dichiarare funzionante qualcosa solo perché esiste nel codice.
+“FUNZIONANTE” richiede evidenza runtime o test superato.
+Distingui sempre tra:
+- presente;
+- collegato;
+- testato;
+- verificato realmente.
