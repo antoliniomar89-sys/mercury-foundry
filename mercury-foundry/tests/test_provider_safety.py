@@ -50,13 +50,17 @@ def test_env_var_selects_provider(monkeypatch):
     assert isinstance(provider, FakeModel)
 
 
-def test_list_available_providers_contains_fake_only_in_this_instance():
-    # Il registro elenca i NOMI dei provider disponibili in questa istanza
-    # (V0.2 aggiunge 'openai' come provider reale collegabile), indipendentemente
-    # dal fatto che le sue credenziali siano già configurate o no: la richiesta
-    # di un provider mal configurato deve comunque fallire in modo esplicito
-    # (vedi test_real_provider.py::test_provider_factory_rejects_openai_without_config).
-    assert list_available_providers() == ["fake", "openai"]
+def test_list_available_providers_includes_fake_and_openai_compatible():
+    # Il registro elenca i NOMI dei provider disponibili in questa istanza.
+    # MF-PROVIDER-001 aggiunge "openai_compatible" come nome canonico accanto
+    # all'alias retrocompatibile "openai". Indipendentemente dal fatto che le
+    # credenziali siano già configurate: la richiesta di un provider mal
+    # configurato fallisce esplicitamente (vedi test_real_provider.py).
+    providers = list_available_providers()
+    assert "fake" in providers
+    assert "openai" in providers
+    assert "openai_compatible" in providers
+    assert providers == sorted(providers)  # ordinamento alfabetico garantito
 
 
 def test_provider_metadata_persists_on_attempt_and_candidate(tmp_path):

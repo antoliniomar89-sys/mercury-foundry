@@ -13,7 +13,11 @@ from dataclasses import dataclass
 # Nomi delle variabili d'ambiente / secret attese per il provider reale.
 ENV_API_KEY = "MERCURY_AI_API_KEY"
 ENV_MODEL = "MERCURY_AI_MODEL"
-ENV_BASE_URL = "MERCURY_AI_API_BASE_URL"
+# Base URL: MERCURY_AI_BASE_URL è il nome primario (MF-PROVIDER-001).
+# MERCURY_AI_API_BASE_URL è l'alias retrocompatibile (vecchio nome): se presente
+# e il nome primario non lo è, viene usato come fallback — stessa semantica, due nomi.
+ENV_BASE_URL = "MERCURY_AI_API_BASE_URL"       # alias retrocompatibile
+ENV_BASE_URL_SHORT = "MERCURY_AI_BASE_URL"     # nome primario MF-PROVIDER-001
 ENV_TIMEOUT_SECONDS = "MERCURY_AI_TIMEOUT_SECONDS"
 ENV_MAX_CALLS_PER_RUN = "MERCURY_AI_MAX_CALLS_PER_RUN"
 ENV_MAX_TOKENS_PER_RUN = "MERCURY_AI_MAX_TOKENS_PER_RUN"
@@ -23,7 +27,7 @@ ENV_COST_PER_1K_TOKENS_USD = "MERCURY_AI_COST_PER_1K_TOKENS_USD"  # opzionale
 REQUIRED_ENV_VARS = (
     ENV_API_KEY,
     ENV_MODEL,
-    ENV_BASE_URL,
+    ENV_BASE_URL,   # controllato via missing_required_env_vars con alias short
     ENV_TIMEOUT_SECONDS,
     ENV_MAX_CALLS_PER_RUN,
     ENV_MAX_TOKENS_PER_RUN,
@@ -61,9 +65,19 @@ class RealProviderConfig:
 
 
 def missing_required_env_vars(env: dict | None = None) -> list[str]:
-    """Elenca le variabili richieste assenti/vuote, senza leggerne il valore altrove."""
+    """Elenca le variabili richieste assenti/vuote, senza leggerne il valore altrove.
+
+    Per la base URL, MERCURY_AI_BASE_URL (nome primario, MF-PROVIDER-001) e
+    MERCURY_AI_API_BASE_URL (alias retrocompatibile) sono intercambiabili: basta
+    che uno dei due sia presente per soddisfare il requisito.
+    """
     source = env if env is not None else os.environ
-    return [name for name in REQUIRED_ENV_VARS if not source.get(name)]
+    missing = [name for name in REQUIRED_ENV_VARS if not source.get(name)]
+    # ENV_BASE_URL e ENV_BASE_URL_SHORT sono alias: se il nome legacy manca ma
+    # il nome primario è presente, il requisito è comunque soddisfatto.
+    if ENV_BASE_URL in missing and source.get(ENV_BASE_URL_SHORT):
+        missing.remove(ENV_BASE_URL)
+    return missing
 
 
 def load_real_provider_config(env: dict | None = None) -> RealProviderConfig:
@@ -72,6 +86,9 @@ def load_real_provider_config(env: dict | None = None) -> RealProviderConfig:
     Fail-closed: qualunque valore obbligatorio mancante o non convertibile
     interrompe subito, con un messaggio che non include mai il valore delle
     credenziali.
+
+    Base URL: accetta sia MERCURY_AI_BASE_URL (primario) sia
+    MERCURY_AI_API_BASE_URL (alias retrocompatibile), con priorità al primo.
     """
     source = env if env is not None else os.environ
 
@@ -79,7 +96,8 @@ def load_real_provider_config(env: dict | None = None) -> RealProviderConfig:
     if missing:
         raise ProviderConfigError(
             "Configurazione del provider AI reale incompleta: variabili mancanti o vuote: "
-            f"{', '.join(missing)}."
+            f"{', '.join(missing)}. "
+            f"(Per la base URL sono accettati sia {ENV_BASE_URL_SHORT!r} sia {ENV_BASE_URL!r}.)"
         )
 
     try:
@@ -100,10 +118,14 @@ def load_real_provider_config(env: dict | None = None) -> RealProviderConfig:
             "Timeout e limiti (chiamate/token/costo) del provider AI reale devono essere > 0."
         )
 
+    # Base URL: priorità a MERCURY_AI_BASE_URL (primario MF-PROVIDER-001),
+    # fallback a MERCURY_AI_API_BASE_URL (alias retrocompatibile).
+    base_url = source.get(ENV_BASE_URL_SHORT) or source.get(ENV_BASE_URL) or ""
+
     return RealProviderConfig(
         api_key=source[ENV_API_KEY],
         model=source[ENV_MODEL],
-        base_url=source[ENV_BASE_URL],
+        base_url=base_url,
         timeout_seconds=timeout_seconds,
         max_calls_per_run=max_calls_per_run,
         max_tokens_per_run=max_tokens_per_run,

@@ -46,9 +46,14 @@ def _build_openai_compatible_provider() -> AIProvider:
 # cambiare. `is_simulated` è dichiarato qui in modo esplicito e indipendente
 # dall'implementazione, per poter essere ispezionato anche senza istanziare il
 # provider (usato da `doctor` e dai test).
+#
+# MF-PROVIDER-001: "openai_compatible" è il nome canonico configurabile via
+# MERCURY_AI_PROVIDER=openai_compatible. "openai" è mantenuto come alias
+# retrocompatibile. Entrambi istanziano OpenAICompatibleProvider identicamente.
 PROVIDER_REGISTRY: dict[str, Callable[[], AIProvider]] = {
     "fake": FakeModel,
     "openai": _build_openai_compatible_provider,
+    "openai_compatible": _build_openai_compatible_provider,
 }
 
 SIMULATED_PROVIDER_NAMES: frozenset[str] = frozenset({"fake"})
