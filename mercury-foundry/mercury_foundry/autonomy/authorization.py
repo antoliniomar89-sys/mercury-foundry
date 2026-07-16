@@ -32,6 +32,7 @@ from dataclasses import dataclass
 
 from mercury_foundry.audit.logger import log_action
 from mercury_foundry.autonomy import models as am
+from mercury_foundry.constitutional.shadow import maybe_validate_constitution
 
 
 class AutonomyBoundaryViolation(RuntimeError):
@@ -278,7 +279,32 @@ def authorize_organ_decision(
             requires_human_approval=True,
         )
 
-    # --- 6. Applica authority_mode ---
+    # --- 6. Validazione costituzionale (MF-CONST-001) ---
+    # Flusso: Mandate/Authority Validation → Constitutional Validation
+    #         → Existing Decision Path → Audit Record.
+    # In shadow mode: valida e registra, non blocca mai.
+    # In enforce mode: può sollevare ConstitutionalViolationError (V0:
+    #   nessun principio BLOCKING → non blocca in pratica).
+    # In disabled mode: no-op.
+    maybe_validate_constitution(
+        conn,
+        organ_key=organ_key,
+        decision_type=decision_type,
+        authority_mode=authority_mode,
+        subject_type=subject_type,
+        subject_id=subject_id,
+        evidence_refs=list(evidence.keys()) if evidence else [],
+        budget_impact=estimated_budget,
+        risk_level=(
+            "high" if risk_score is not None and risk_score > 0.7
+            else "medium" if risk_score is not None and risk_score > 0.3
+            else "low" if risk_score is not None
+            else None
+        ),
+        correlation_id=correlation_id,
+    )
+
+    # --- 7. Applica authority_mode ---
     return _apply_authority_mode(
         conn, organ_id, organ_key, decision_type, authority_mode,
         subject_type, subject_id, evidence, confidence, risk_score, correlation_id,

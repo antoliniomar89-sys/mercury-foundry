@@ -80,3 +80,28 @@ if _raw_autonomy_mode not in ("shadow", "enforced"):
         f"ricevuto: {_raw_autonomy_mode!r}"
     )
 AUTONOMY_MODE: str = _raw_autonomy_mode
+
+# ---------------------------------------------------------------------------
+# MF-CONST-001 — Constitutional Core
+# ---------------------------------------------------------------------------
+
+# Modalità operativa del Constitutional Core.
+#   disabled           — nessuna validazione costituzionale (no-op totale).
+#   shadow   (default) — valida e registra, non blocca mai il flusso operativo.
+#   enforce            — valida e blocca se enforcement_action = DENY.
+#                        In V0 nessun principio ha enforcement BLOCKING, quindi
+#                        enforce è funzionalmente equivalente a shadow.
+#                        La struttura è predisposta per l'evoluzione futura.
+_CONSTITUTIONAL_CORE_MODE_ENV = "MERCURY_CONSTITUTIONAL_CORE_MODE"
+_raw_const_mode = os.environ.get(_CONSTITUTIONAL_CORE_MODE_ENV, "shadow")
+if _raw_const_mode not in ("disabled", "shadow", "enforce"):
+    raise ValueError(
+        f"{_CONSTITUTIONAL_CORE_MODE_ENV} deve essere 'disabled', 'shadow' o 'enforce', "
+        f"ricevuto: {_raw_const_mode!r}"
+    )
+CONSTITUTIONAL_CORE_MODE: str = _raw_const_mode
+
+# Percorso del file della Costituzione (override via env var).
+# Default: constitution_v1.json distribuito con il package constitutional/.
+_CONSTITUTION_PATH_ENV = "MERCURY_CONSTITUTION_PATH"
+CONSTITUTION_PATH: str | None = os.environ.get(_CONSTITUTION_PATH_ENV)

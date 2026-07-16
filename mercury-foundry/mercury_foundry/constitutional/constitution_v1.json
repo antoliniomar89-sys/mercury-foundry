@@ -1,0 +1,101 @@
+{
+  "version": "1.0.0",
+  "status": "active",
+  "effective_from": "2026-07-16T00:00:00Z",
+  "created_at": "2026-07-16T00:00:00Z",
+  "approved_by": "FOUNDRY_GOVERNANCE",
+  "checksum": "auto",
+  "principles": [
+    {
+      "principle_id": "CONST-001",
+      "title": "Evidence Before Investment",
+      "description": "Nessun aumento rilevante di investimento deve essere autorizzato senza evidenza adeguata. Quando un'azione comporta un impatto economico misurabile, devono essere presenti riferimenti a evidenze che giustifichino l'investimento.",
+      "level": "constitutional",
+      "status": "active",
+      "enforcement": "audit_only",
+      "applies_to": ["budget_critical"],
+      "required_evidence": ["budget_justification"],
+      "source_refs": [],
+      "created_at": "2026-07-16T00:00:00Z",
+      "updated_at": "2026-07-16T00:00:00Z"
+    },
+    {
+      "principle_id": "CONST-002",
+      "title": "Auditability",
+      "description": "Ogni decisione economicamente o operativamente rilevante deve produrre un record ricostruibile. Il sistema di audit deve essere attivo e il decision_id deve essere sempre presente per le decisioni tracciate.",
+      "level": "constitutional",
+      "status": "active",
+      "enforcement": "audit_only",
+      "applies_to": ["all"],
+      "required_evidence": [],
+      "source_refs": [],
+      "created_at": "2026-07-16T00:00:00Z",
+      "updated_at": "2026-07-16T00:00:00Z"
+    },
+    {
+      "principle_id": "CONST-003",
+      "title": "Bounded Autonomy",
+      "description": "Ogni organo opera esclusivamente entro il proprio mandato e livello di autorità. L'authority_mode deve essere un valore riconosciuto e coerente con il mandato registrato per l'organo.",
+      "level": "constitutional",
+      "status": "active",
+      "enforcement": "audit_only",
+      "applies_to": ["all"],
+      "required_evidence": [],
+      "source_refs": [],
+      "created_at": "2026-07-16T00:00:00Z",
+      "updated_at": "2026-07-16T00:00:00Z"
+    },
+    {
+      "principle_id": "CONST-004",
+      "title": "Reversible First",
+      "description": "Quando possibile, preferire decisioni reversibili prima di assumere impegni irreversibili. Azioni autonome ad alto rischio devono includere un piano di rollback o essere segnalate come potenzialmente irreversibili.",
+      "level": "operational",
+      "status": "active",
+      "enforcement": "advisory",
+      "applies_to": ["autonomous_actions"],
+      "required_evidence": [],
+      "source_refs": [],
+      "created_at": "2026-07-16T00:00:00Z",
+      "updated_at": "2026-07-16T00:00:00Z"
+    },
+    {
+      "principle_id": "CONST-005",
+      "title": "Business Cell as Economic Unit",
+      "description": "Il prodotto può essere incubato nel Product OS, ma la futura unità economica autonoma di Mercury è la Business Cell. Questo principio è informativo in V0 e non genera violazioni operative.",
+      "level": "constitutional",
+      "status": "shadow",
+      "enforcement": "advisory",
+      "applies_to": [],
+      "required_evidence": [],
+      "source_refs": [],
+      "created_at": "2026-07-16T00:00:00Z",
+      "updated_at": "2026-07-16T00:00:00Z"
+    },
+    {
+      "principle_id": "CONST-006",
+      "title": "Knowledge Classification",
+      "description": "La conoscenza deve essere classificata come locale, condivisibile o strategica prima della propagazione. In V0 questo principio è in osservazione e non genera violazioni operative.",
+      "level": "operational",
+      "status": "shadow",
+      "enforcement": "advisory",
+      "applies_to": [],
+      "required_evidence": [],
+      "source_refs": [],
+      "created_at": "2026-07-16T00:00:00Z",
+      "updated_at": "2026-07-16T00:00:00Z"
+    },
+    {
+      "principle_id": "CONST-007",
+      "title": "Human Approval for Constitutional Change",
+      "description": "Nessun agente può attivare autonomamente una modifica costituzionale. Qualsiasi azione il cui action_type contenga 'constitutional' non può avere authority_mode 'autonomous'.",
+      "level": "immutable",
+      "status": "active",
+      "enforcement": "audit_only",
+      "applies_to": ["constitutional_actions"],
+      "required_evidence": [],
+      "source_refs": [],
+      "created_at": "2026-07-16T00:00:00Z",
+      "updated_at": "2026-07-16T00:00:00Z"
+    }
+  ]
+}
