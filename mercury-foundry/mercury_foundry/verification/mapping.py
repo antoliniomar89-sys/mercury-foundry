@@ -280,6 +280,33 @@ SOURCE_MAPPINGS: list[SourceMapping] = [
         risk_class           = RiskClass.MEDIUM,
     ),
 
+    # --- Execution Loop (MF-INTEGRATE-001) ---
+    SourceMapping(
+        pattern              = "execution/loop",
+        domains              = ["execution"],
+        test_files           = [
+            "tests/test_execution_loop_e2e_healthcheck.py",
+            "tests/test_atomic_build.py",
+            "tests/test_staging_isolation.py",
+            "tests/test_integrate_001_adaptive_verification.py",
+        ],
+        minimum_level        = VerificationLevel.IMPACTED,
+        risk_class           = RiskClass.HIGH,
+    ),
+
+    # --- Wiring ---
+    SourceMapping(
+        pattern              = "wiring.py",
+        domains              = ["wiring", "execution"],
+        test_files           = [
+            "tests/test_execution_loop_e2e_healthcheck.py",
+            "tests/test_doctor.py",
+            "tests/test_integrate_001_adaptive_verification.py",
+        ],
+        minimum_level        = VerificationLevel.IMPACTED,
+        risk_class           = RiskClass.HIGH,
+    ),
+
     # --- Literal constraints ---
     SourceMapping(
         pattern              = "literal",

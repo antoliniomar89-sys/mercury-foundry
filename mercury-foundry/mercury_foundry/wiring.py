@@ -1,6 +1,11 @@
 """Punto unico di composizione: costruisce Orchestrator/Builder/Evaluator/DB.
 
 Usato sia dalla CLI sia dai test, per non duplicare la logica di wiring.
+
+MF-INTEGRATE-001: se ADAPTIVE_VERIFICATION_ENABLED è True, costruisce e
+inietta un VerificationRunner in ExecutionLoop. Il VerificationRunner è
+opzionale: tutti i chiamanti esistenti che costruiscono ExecutionLoop
+direttamente continuano a funzionare invariati.
 """
 
 from __future__ import annotations
@@ -37,7 +42,20 @@ def build_foundry(
     provider_name: str | None = None,
     staging_base_dir: Path | str | None = None,
     backup_base_dir: Path | str | None = None,
+    adaptive_verification: bool | None = None,
 ) -> Foundry:
+    """Costruisce un Foundry completamente cablato.
+
+    Args:
+        db_path: percorso del DB SQLite (default: config.DEFAULT_DB_PATH).
+        sandbox_root: root del target project (default: config.TARGET_PROJECT_DIR).
+        provider_name: nome del provider AI (default: da configurazione).
+        staging_base_dir: radice degli staging per-tentativo.
+        backup_base_dir: radice dei backup dell'Approval Gate.
+        adaptive_verification: True/False per override esplicito del flag
+            ADAPTIVE_VERIFICATION_ENABLED. None (default) usa il valore
+            dalla configurazione (variabile d'ambiente).
+    """
     conn = db.connect(db_path)
     ai_provider = get_provider(provider_name)
     workspace = Workspace(Path(sandbox_root) if sandbox_root is not None else config.TARGET_PROJECT_DIR)
@@ -64,9 +82,39 @@ def build_foundry(
     else:
         resolved_backup_base_dir = config.BACKUP_BASE_DIR
 
+    # ----------------------------------------------------------------
+    # MF-INTEGRATE-001: VerificationRunner opzionale
+    #
+    # Costruito solo se l'adaptive verification è abilitata (flag di
+    # configurazione o override esplicito). Usa config.BASE_DIR come
+    # project_root: le SOURCE_MAPPINGS mappano il codice di mercury_foundry.
+    # L'esecuzione effettiva dei test avviene sempre nel staging isolato
+    # (via Evaluator.evaluate), non nella project_root del runner.
+    # ----------------------------------------------------------------
+    _adaptive_enabled = (
+        adaptive_verification
+        if adaptive_verification is not None
+        else config.ADAPTIVE_VERIFICATION_ENABLED
+    )
+    verification_runner = None
+    if _adaptive_enabled:
+        try:
+            from mercury_foundry.verification.runner import VerificationRunner
+            verification_runner = VerificationRunner()
+        except Exception:  # noqa: BLE001
+            # VerificationRunner è opzionale: se non disponibile il ciclo
+            # usa il percorso legacy senza interrompere il boot.
+            verification_runner = None
+
     builder = Builder(ai_provider, workspace)
     evaluator = Evaluator(TestRunner(workspace.root))
-    execution_loop = ExecutionLoop(conn, builder, evaluator, staging_base_dir=resolved_staging_base_dir)
+    execution_loop = ExecutionLoop(
+        conn,
+        builder,
+        evaluator,
+        staging_base_dir=resolved_staging_base_dir,
+        verification_runner=verification_runner,
+    )
     orchestrator = Orchestrator(conn, ai_provider, execution_loop)
 
     return Foundry(

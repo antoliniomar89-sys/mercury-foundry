@@ -142,3 +142,17 @@ _OUTCOME_AUTO_BUDGET_INCREASE_ENV = "MERCURY_OUTCOME_AUTO_BUDGET_INCREASE_ENABLE
 OUTCOME_AUTO_BUDGET_INCREASE_ENABLED: bool = (
     os.environ.get(_OUTCOME_AUTO_BUDGET_INCREASE_ENV, "false").lower() == "true"
 )
+
+# ---------------------------------------------------------------------------
+# MF-INTEGRATE-001 — Adaptive Verification Integration
+# ---------------------------------------------------------------------------
+
+# Feature flag: se True, ExecutionLoop usa VerificationRunner per selezionare
+# i test da eseguire in base ai file modificati dal BUILD, evitando di
+# rieseguire la suite completa a ogni tentativo.
+# Default True: si disabilita con MERCURY_ADAPTIVE_VERIFICATION_ENABLED=false.
+# Se False (o nessun VerificationRunner iniettato), comportamento legacy invariato.
+_ADAPTIVE_VERIFICATION_ENABLED_ENV = "MERCURY_ADAPTIVE_VERIFICATION_ENABLED"
+ADAPTIVE_VERIFICATION_ENABLED: bool = (
+    os.environ.get(_ADAPTIVE_VERIFICATION_ENABLED_ENV, "true").lower() == "true"
+)
