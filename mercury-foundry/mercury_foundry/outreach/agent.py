@@ -34,6 +34,50 @@ _DIRECT_CONTACTABILITY = "DIRECT"
 _ALLOWED_QS = {"HIGH_FIT", "PLAUSIBLE"}
 
 
+# ── Filtro placeholder / email dimostrative ───────────────────────────────────
+
+# Domini riservati a documentazione, esempi, test
+_PLACEHOLDER_DOMAINS = frozenset({
+    "example.com", "example.org", "example.net",
+    "domain.com", "test.com", "test.org", "test.net",
+    "placeholder.com", "yourdomain.com", "yoursite.com",
+    "acme.com", "sample.com", "fake.com", "invalid",
+})
+
+# Local-part generici che compaiono solo in template/demo
+_PLACEHOLDER_LOCAL_PARTS = frozenset({
+    "user", "name", "test", "demo", "example",
+    "noreply", "no-reply", "donotreply",
+    "admin", "webmaster", "postmaster",
+})
+
+# Prefissi che rendono l'indirizzo non reale a prescindere dal dominio
+_PLACEHOLDER_PREFIXES = ("demo@", "noreply@", "no-reply@", "donotreply@", "test@test.")
+
+
+def _is_placeholder_email(email: str) -> bool:
+    """True se l'email è palesemente un placeholder o indirizzo dimostrativo.
+
+    Criteri:
+    - dominio in _PLACEHOLDER_DOMAINS (es. domain.com, example.com)
+    - local-part in _PLACEHOLDER_LOCAL_PARTS (es. "user", "name")
+    - prefisso in _PLACEHOLDER_PREFIXES (es. demo@*, noreply@*)
+    Non modifica né valida formato SMTP: è solo un guardrail lessicale.
+    """
+    if not email or "@" not in email:
+        return True
+    local, _, domain = email.lower().strip().partition("@")
+    domain = domain.rstrip(".")
+    if domain in _PLACEHOLDER_DOMAINS:
+        return True
+    if local in _PLACEHOLDER_LOCAL_PARTS:
+        return True
+    for prefix in _PLACEHOLDER_PREFIXES:
+        if email.lower().startswith(prefix):
+            return True
+    return False
+
+
 # ── Provider AI reale ─────────────────────────────────────────────────────────
 
 def _build_real_generate_fn() -> GenerateFn:
@@ -96,6 +140,9 @@ def _select_leads(verified_result: dict) -> list[dict]:
         if qs not in _ALLOWED_QS:
             continue
         if not has_email and not has_form:
+            continue
+        # Escludi email placeholder prima della preparazione
+        if has_email and _is_placeholder_email(lead.get("verified_email", "")):
             continue
 
         selected.append(lead)
@@ -334,6 +381,17 @@ class OutreachAgent:
         now = datetime.now(timezone.utc)
 
         for msg in to_send:
+            # Rifiuta recipient placeholder prima dell'invio — guardrail duplicato
+            # per proteggere anche da file prepared_latest.json contenenti dati vecchi.
+            if _is_placeholder_email(msg.recipient):
+                msg.delivery_status = DeliveryStatus.FAILED
+                msg.error = (
+                    f"Destinatario escluso: '{msg.recipient}' è un indirizzo "
+                    "placeholder o dimostrativo, non un contatto reale."
+                )
+                failed_count += 1
+                continue
+
             msg_id, error = smtp_fn(msg)
             if error:
                 msg.delivery_status = DeliveryStatus.FAILED

@@ -225,7 +225,7 @@ def test_no_invented_data():
     lead = _make_lead(
         "inv01",
         name="Test User",
-        verified_email="test@domain.com",
+        verified_email="testuser@realsite.io",   # email reale non placeholder
         role="Content writer",
         website="https://testuser.com",
     )
@@ -236,7 +236,7 @@ def test_no_invented_data():
     def strict_generate(system_prompt: str, user_prompt: str) -> dict:
         # Verifica che il nome del lead sia nel prompt (non inventato)
         assert "Test User" in user_prompt, "Il nome del lead deve essere nel prompt."
-        assert "test@domain.com" in user_prompt, "L'email verificata deve essere nel prompt."
+        assert "testuser@realsite.io" in user_prompt, "L'email verificata deve essere nel prompt."
         return {
             "subject": "A question about your writing workflow",
             "message": (
@@ -461,4 +461,155 @@ def test_next_action_always_present():
     no_smtp_result = agent_no_smtp.send_prepared({"messages": []})
     assert no_smtp_result.next_action, (
         "next_action deve essere presente anche in stato BLOCKED."
+    )
+
+
+# ── Test 11: Placeholder escluso da prepare ───────────────────────────────────
+
+def test_placeholder_email_excluded_from_prepare():
+    """user@domain.com e indirizzi equivalenti devono essere esclusi prima della prepare."""
+    from mercury_foundry.outreach.agent import _is_placeholder_email
+
+    placeholder_cases = [
+        "user@domain.com",
+        "name@example.com",
+        "test@test.com",
+        "demo@anysite.com",
+        "noreply@company.org",
+        "no-reply@something.net",
+        "admin@example.org",
+        "user@example.net",
+        "webmaster@yourdomain.com",
+    ]
+    for addr in placeholder_cases:
+        assert _is_placeholder_email(addr), (
+            f"'{addr}' deve essere riconosciuto come placeholder."
+        )
+
+    # Verifica che il filtro escluda il lead dal batch
+    leads = [
+        _make_lead("ph01", verified_email="user@domain.com"),
+        _make_lead("ph02", verified_email="real@gmail.com"),
+    ]
+    verified = _make_verified_result(leads)
+    opportunity = _make_opportunity()
+    agent = OutreachAgent(generate_fn=_make_generate_fn())
+
+    result = agent.prepare(verified, opportunity)
+
+    lead_ids = {m.lead_id for m in result.messages if m.delivery_status.value == "PREPARED"}
+    assert "ph01" not in lead_ids, (
+        "Lead con email placeholder non deve comparire nei messaggi preparati."
+    )
+    assert "ph02" in lead_ids, (
+        "Lead con email reale deve essere incluso nel batch."
+    )
+
+
+# ── Test 12: Email verificata inclusa ─────────────────────────────────────────
+
+def test_verified_real_email_included():
+    """Email con pattern chiaramente reale deve passare il filtro."""
+    from mercury_foundry.outreach.agent import _is_placeholder_email
+
+    real_cases = [
+        "cheediwrites@gmail.com",
+        "mohit@mohitgangrade.com",
+        "simrangangwani61@gmail.com",
+        "alice.smith@myagency.io",
+        "freelancer@protonmail.com",
+    ]
+    for addr in real_cases:
+        assert not _is_placeholder_email(addr), (
+            f"'{addr}' non deve essere classificata come placeholder."
+        )
+
+    lead = _make_lead("real01", verified_email="cheediwrites@gmail.com")
+    verified = _make_verified_result([lead])
+    opportunity = _make_opportunity()
+    agent = OutreachAgent(generate_fn=_make_generate_fn())
+
+    result = agent.prepare(verified, opportunity)
+
+    assert any(
+        m.lead_id == "real01" and m.delivery_status.value == "PREPARED"
+        for m in result.messages
+    ), "Lead con email reale deve essere incluso e preparato."
+
+
+# ── Test 13: Batch max 3 con 4 lead (1 placeholder) ──────────────────────────
+
+def test_batch_size_3_after_placeholder_filter():
+    """Con 4 lead DIRECT (1 placeholder), il batch deve contenere max 3 messaggi."""
+    leads = [
+        _make_lead("r1", name="Alice",  verified_email="alice@realsite.com"),
+        _make_lead("r2", name="Bob",    verified_email="user@domain.com"),   # placeholder
+        _make_lead("r3", name="Carol",  verified_email="carol@workmail.io"),
+        _make_lead("r4", name="Dave",   verified_email="dave@portfolio.net"),
+    ]
+    verified = _make_verified_result(leads)
+    opportunity = _make_opportunity()
+    agent = OutreachAgent(generate_fn=_make_generate_fn())
+
+    result = agent.prepare(verified, opportunity)
+
+    prepared = [m for m in result.messages if m.delivery_status.value == "PREPARED"]
+    assert len(prepared) == 3, (
+        f"Dopo aver escluso il placeholder, devono esserci 3 messaggi, trovati {len(prepared)}."
+    )
+    recipients = {m.recipient for m in prepared}
+    assert "user@domain.com" not in recipients, (
+        "Indirizzo placeholder non deve essere presente tra i destinatari."
+    )
+
+
+# ── Test 14: send non invia recipient non verificati ──────────────────────────
+
+def test_send_rejects_placeholder_recipient():
+    """send_prepared deve rifiutare recipient placeholder anche se nel file prepared."""
+    smtp_calls: list[str] = []
+
+    def tracking_smtp(msg: OutreachMessage) -> tuple[str, str]:
+        smtp_calls.append(msg.recipient)
+        return f"<id-{msg.lead_id}>", ""
+
+    # Simula un file prepared_latest.json con un placeholder rimasto dentro
+    prepared_result = {
+        "status": "PREPARED",
+        "timestamp": "2026-07-17T11:00:00+00:00",
+        "messages": [
+            OutreachMessage(
+                lead_id="stale01",
+                recipient="user@domain.com",         # placeholder
+                subject="Subject",
+                message="Body. Reply 'stop' to opt out.",
+                channel="email",
+                prepared_at="2026-07-17T11:00:00+00:00",
+                delivery_status=DeliveryStatus.PREPARED,
+            ).to_dict(),
+            OutreachMessage(
+                lead_id="real01",
+                recipient="cheediwrites@gmail.com",  # reale
+                subject="Subject",
+                message="Body. Reply 'stop' to opt out.",
+                channel="email",
+                prepared_at="2026-07-17T11:00:00+00:00",
+                delivery_status=DeliveryStatus.PREPARED,
+            ).to_dict(),
+        ],
+    }
+
+    agent = OutreachAgent(generate_fn=_make_generate_fn(), smtp_fn=tracking_smtp)
+    result = agent.send_prepared(prepared_result)
+
+    assert "user@domain.com" not in smtp_calls, (
+        "smtp_fn non deve essere chiamata per recipient placeholder."
+    )
+    assert "cheediwrites@gmail.com" in smtp_calls, (
+        "smtp_fn deve essere chiamata per recipient reale."
+    )
+    # Il messaggio placeholder deve risultare FAILED con errore esplicito
+    failed = [m for m in result.messages if m.delivery_status == DeliveryStatus.FAILED]
+    assert any("placeholder" in m.error.lower() or "dimostrativo" in m.error.lower() for m in failed), (
+        "Il messaggio fallito deve riportare il motivo (placeholder) nel campo error."
     )
