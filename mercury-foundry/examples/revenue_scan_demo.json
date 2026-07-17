@@ -1,0 +1,19 @@
+{
+  "business_name": "Mercury Demo Bistro",
+  "business_type": "bistrot / caffetteria con cucina",
+  "city": "Milano",
+  "primary_goal": "foot_traffic",
+  "idempotency_key": "demo-mercury-bistro-v0-001",
+  "requested_at": "2026-07-16T10:00:00+00:00",
+  "business_description": "Bistrot con cucina aperto a pranzo e aperitivo (12-15 e 18-21). Circa 40 coperti. Menu stagionale con prodotti locali. Ambiente moderno e informale.",
+  "target_customer": "Professionisti del quartiere 25-45 anni, clienti di passaggio, piccoli gruppi per aperitivo",
+  "current_offer": "Menu pranzo fisso 14 EUR (primo + secondo + acqua). Aperitivo con buffet a 10 EUR. Brunch domenicale 18 EUR.",
+  "website_url": "https://example-mercury-demo-bistro.it",
+  "instagram_url": "https://instagram.com/mercury_demo_bistro",
+  "google_maps_url": "https://maps.google.com/?q=Mercury+Demo+Bistro+Milano",
+  "public_reviews_text": "[DEMO - TESTO FITTIZIO, NESSUNA PERSONA REALE] Recensione 1 (4/5): 'Ottimo pranzo, veloce e buono. Prezzi giusti per la zona.' | Recensione 2 (3/5): 'Carino ma difficile trovare posto senza prenotare. Il menu cambia spesso.' | Recensione 3 (5/5): 'Aperitivo eccellente, buffet abbondante.' | Recensione 4 (2/5): 'Peccato che non si possa prenotare online, ho chiamato 3 volte senza risposta.' | Recensione 5 (4/5): 'Brunch domenicale ottimo, ma andrebbero comunicati meglio gli orari.'",
+  "social_profile_text": "[DEMO - TESTO FITTIZIO] Instagram: 340 follower. Ultimo post: 12 giorni fa (foto piatto del giorno). Bio: 'Cucina stagionale • Aperitivo • Brunch domenicale - Milano'. Nessun link bio. Stories inattive da 3 settimane.",
+  "website_text": "[DEMO - TESTO FITTIZIO] Homepage: 'Benvenuti al Mercury Demo Bistro'. Nessun menu online aggiornato. Orari non visibili in homepage. Nessun sistema di prenotazione online. Numero di telefono presente ma non cliccabile da mobile.",
+  "known_constraints": "Staff di 3 persone. Budget marketing molto limitato (max 200 EUR/mese). Nessun POS con sistema di fidelizzazione. Proprietario gestisce i social in autonomia.",
+  "preferred_language": "it"
+}

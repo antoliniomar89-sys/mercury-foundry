@@ -44,6 +44,7 @@ class MissionType(str, Enum):
     CAPABILITY_DEVELOPMENT = "capability_development"
     BUSINESS_GENESIS      = "business_genesis"
     CUSTOM                = "custom"
+    LOCAL_REVENUE_SCAN    = "local_revenue_scan"
 
 
 class MissionStatus(str, Enum):

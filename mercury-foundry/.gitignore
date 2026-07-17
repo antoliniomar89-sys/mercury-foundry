@@ -28,6 +28,9 @@ htmlcov/
 data/
 *.db
 *.db-shm
+
+# Output generati dai prodotti (non committare)
+output/
 *.db-wal
 
 # Editor
