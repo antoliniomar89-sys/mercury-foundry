@@ -55,6 +55,12 @@ class EnrichedLead:
     qualification_status: EnrichedLeadStatus
     rejection_reason: str = ""
     next_action: str = ""
+    # Campi aggiunti da MF-QB-CONTACT-VERIFY-001
+    contact_page_url: str = ""
+    verified_email: str = ""
+    verified_form_url: str = ""
+    verified_social_url: str = ""
+    verification_evidence: str = ""
 
     def __post_init__(self) -> None:
         if isinstance(self.contactability, str):
@@ -87,6 +93,12 @@ class EnrichedLead:
             "qualification_status": self.qualification_status.value,
             "rejection_reason": self.rejection_reason,
             "next_action": self.next_action,
+            # Campi verifica contatti (MF-QB-CONTACT-VERIFY-001)
+            "contact_page_url": self.contact_page_url,
+            "verified_email": self.verified_email,
+            "verified_form_url": self.verified_form_url,
+            "verified_social_url": self.verified_social_url,
+            "verification_evidence": self.verification_evidence,
         }
 
 

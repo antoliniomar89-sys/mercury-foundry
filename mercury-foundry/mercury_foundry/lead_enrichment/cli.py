@@ -4,6 +4,8 @@ Utilizzo:
     python -m mercury_foundry.lead_enrichment --run-latest
     python -m mercury_foundry.lead_enrichment --lead-result-file PATH/TO/leads.json
     python -m mercury_foundry.lead_enrichment --run-latest --output output/leads/enriched_latest.json
+    python -m mercury_foundry.lead_enrichment --verify-contacts-latest
+    python -m mercury_foundry.lead_enrichment --verify-contacts-latest --output output/leads/contact_verified_latest.json
 """
 from __future__ import annotations
 
@@ -14,14 +16,17 @@ import sys
 from pathlib import Path
 
 from mercury_foundry.lead_enrichment.agent import EnrichmentAgent
+from mercury_foundry.lead_enrichment.contact_verify import ContactVerifier
 from mercury_foundry.lead_enrichment.models import (
     EnrichedLeadResult,
     EnrichedLeadResultStatus,
     EnrichedLeadStatus,
 )
 
-_DEFAULT_LEAD_RESULT_PATH = Path("output/leads/latest.json")
-_DEFAULT_OUTPUT_PATH = Path("output/leads/enriched_latest.json")
+_DEFAULT_LEAD_RESULT_PATH    = Path("output/leads/latest.json")
+_DEFAULT_OUTPUT_PATH         = Path("output/leads/enriched_latest.json")
+_DEFAULT_ENRICHED_PATH       = Path("output/leads/enriched_latest.json")
+_DEFAULT_VERIFIED_OUTPUT_PATH = Path("output/leads/contact_verified_latest.json")
 
 
 def _load_lead_result(path: Path) -> dict | None:
@@ -118,6 +123,106 @@ def _print_result(result: EnrichedLeadResult) -> None:
     print(f"PROSSIMA AZIONE:\n  {result.next_action}")
 
 
+def _print_verified_result(result: dict) -> None:
+    """Stampa il risultato della verifica contatti."""
+    print()
+    print(f"STATO: {result.get('status', 'N/D')}")
+    print(f"TIMESTAMP: {result.get('timestamp', 'N/D')}")
+
+    if result.get("block_reason"):
+        print()
+        print(f"BLOCCO:\n  {result['block_reason']}")
+        print()
+        print(f"PROSSIMA AZIONE:\n  {result.get('next_action', '')}")
+        return
+
+    direct   = [l for l in result.get("enriched_leads", []) if l.get("contactability") == "DIRECT"]
+    indirect = [l for l in result.get("enriched_leads", []) if l.get("contactability") == "INDIRECT"]
+    review   = [l for l in result.get("enriched_leads", []) if l.get("contactability") not in ("DIRECT", "INDIRECT")]
+    none_    = result.get("rejected_leads", [])
+
+    print()
+    print(
+        f"RISULTATO: {len(direct)} DIRECT | {len(indirect)} INDIRECT | "
+        f"{len(review)} NEEDS_REVIEW | {len(none_)} NONE"
+    )
+
+    if direct:
+        print()
+        print("DIRECT (canale verificato):")
+        for i, lead in enumerate(direct, 1):
+            print(f"\n  {i}. {lead.get('name', 'N/D')}")
+            print(f"     Canale: {lead.get('public_contact', 'N/D')} ({lead.get('contact_type', 'N/D')})")
+            if lead.get("verified_email"):
+                print(f"     Email:  {lead['verified_email']}")
+            if lead.get("verified_form_url"):
+                print(f"     Form:   {lead['verified_form_url']}")
+            if lead.get("verified_social_url"):
+                print(f"     Social: {lead['verified_social_url']}")
+            print(f"     Evidenza: {lead.get('verification_evidence', 'N/D')[:120]}")
+
+    if indirect:
+        print()
+        print("INDIRECT:")
+        for lead in indirect:
+            print(f"  - {lead.get('name', 'N/D')}: {lead.get('verified_social_url') or lead.get('public_contact', 'N/D')}")
+
+    if none_:
+        print()
+        print(f"NONE ({len(none_)}) — nessun canale trovato:")
+        for lead in none_:
+            print(f"  - {lead.get('name', 'N/D')}: {lead.get('verification_evidence', 'N/D')[:80]}")
+
+    print()
+    print(f"PROSSIMA AZIONE:\n  {result.get('next_action', '')}")
+
+
+def _run_verify_contacts(args: argparse.Namespace) -> int:
+    """Esegue la verifica reale dei canali per enriched_latest.json."""
+    input_path = (
+        Path(args.enriched_file) if hasattr(args, "enriched_file") and args.enriched_file
+        else _DEFAULT_ENRICHED_PATH
+    )
+
+    if not input_path.exists():
+        print(
+            f"ERRORE: EnrichedLeadResult non trovato in '{input_path}'.",
+            file=sys.stderr,
+        )
+        print(
+            f"Eseguire prima: python -m mercury_foundry.lead_enrichment --run-latest "
+            f"--output {_DEFAULT_ENRICHED_PATH}",
+            file=sys.stderr,
+        )
+        return 1
+
+    try:
+        enriched_result = json.loads(input_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        print(f"ERRORE: impossibile leggere '{input_path}': {exc}", file=sys.stderr)
+        return 1
+
+    leads_count = len(enriched_result.get("enriched_leads", []))
+    print("Mercury Contact Verifier — avvio verifica canali reali...")
+    print(f"Lead da verificare: {leads_count}")
+
+    verifier = ContactVerifier()
+    result = verifier.run(enriched_result)
+    _print_verified_result(result)
+
+    output_path = (
+        Path(args.output) if args.output else _DEFAULT_VERIFIED_OUTPUT_PATH
+    )
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(
+        json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    print(f"\nRisultato salvato in: {output_path}")
+
+    status = result.get("status", "")
+    return 0 if status in ("COMPLETED", "COMPLETED_WITH_REVIEW") else 1
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="python -m mercury_foundry.lead_enrichment",
@@ -136,6 +241,18 @@ def main(argv: list[str] | None = None) -> int:
         metavar="PATH",
         help="Percorso di un LeadResult JSON da arricchire.",
     )
+    group.add_argument(
+        "--verify-contacts-latest",
+        action="store_true",
+        help=f"Verifica i canali reali dell'ultimo EnrichedLeadResult in {_DEFAULT_ENRICHED_PATH}.",
+    )
+    parser.add_argument(
+        "--enriched-file",
+        type=str,
+        default=None,
+        metavar="PATH",
+        help=f"Percorso alternativo dell'EnrichedLeadResult per --verify-contacts-latest.",
+    )
     parser.add_argument(
         "--lead-result-id",
         type=str,
@@ -147,10 +264,13 @@ def main(argv: list[str] | None = None) -> int:
         "--output",
         type=str,
         default=None,
-        help=f"Percorso file JSON in cui salvare il risultato (default: {_DEFAULT_OUTPUT_PATH}).",
+        help=f"Percorso file JSON in cui salvare il risultato.",
     )
 
     args = parser.parse_args(argv)
+
+    if args.verify_contacts_latest:
+        return _run_verify_contacts(args)
 
     if not args.run_latest and not args.lead_result_file and not args.lead_result_id:
         parser.print_help()
